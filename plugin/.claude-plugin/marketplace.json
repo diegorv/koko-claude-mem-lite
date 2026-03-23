@@ -1,5 +1,0 @@
-{
-  "name": "memory-lite-plugin",
-  "description": "Local marketplace for memory-lite plugin",
-  "plugins": ["memory-lite"]
-}
