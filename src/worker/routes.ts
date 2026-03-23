@@ -5,13 +5,14 @@ import {
   getRecentObservations, getRecentSummaries,
   searchObservationsFts, searchObservationsIndex,
   getObservationsByIds, getTimelineAroundObservation,
+  deleteObservation, deleteSummary, deleteSession,
   type ObservationInput,
 } from '../db/queries.js';
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext } from '../context/generator.js';
 import { extractObservation, generateSummary } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
-import { getSetting } from '../utils/settings.js';
+import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
 import { getDb } from '../db/database.js';
 
@@ -373,5 +374,82 @@ app.get('/api/search', async (c) => {
   } catch (error) {
     console.error('[routes] /api/search error:', error);
     return c.json({ error: 'Search failed' }, 500);
+  }
+});
+
+// --- Delete routes ---
+
+app.delete('/api/observations/:id', (c) => {
+  try {
+    const id = parseInt(c.req.param('id'));
+    if (isNaN(id)) return c.json({ error: 'Invalid ID' }, 400);
+    const deleted = deleteObservation(id);
+    if (!deleted) return c.json({ error: 'Observation not found' }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error('[routes] DELETE /api/observations error:', error);
+    return c.json({ error: 'Failed to delete observation' }, 500);
+  }
+});
+
+app.delete('/api/summaries/:id', (c) => {
+  try {
+    const id = parseInt(c.req.param('id'));
+    if (isNaN(id)) return c.json({ error: 'Invalid ID' }, 400);
+    const deleted = deleteSummary(id);
+    if (!deleted) return c.json({ error: 'Summary not found' }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error('[routes] DELETE /api/summaries error:', error);
+    return c.json({ error: 'Failed to delete summary' }, 500);
+  }
+});
+
+app.delete('/api/sessions/:id', (c) => {
+  try {
+    const id = parseInt(c.req.param('id'));
+    if (isNaN(id)) return c.json({ error: 'Invalid ID' }, 400);
+    const deleted = deleteSession(id);
+    if (!deleted) return c.json({ error: 'Session not found' }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error('[routes] DELETE /api/sessions error:', error);
+    return c.json({ error: 'Failed to delete session' }, 500);
+  }
+});
+
+// --- Context preview ---
+
+app.get('/api/dashboard/context-preview', (c) => {
+  try {
+    const project = c.req.query('project') || 'unknown';
+    const context = generateContext(project);
+    const estimatedTokens = Math.ceil(context.length / 4);
+    return c.json({ context, estimatedTokens });
+  } catch (error) {
+    console.error('[routes] /api/dashboard/context-preview error:', error);
+    return c.json({ error: 'Failed to generate context preview' }, 500);
+  }
+});
+
+// --- Settings ---
+
+app.get('/api/settings', (c) => {
+  try {
+    return c.json(getAllSettings());
+  } catch (error) {
+    console.error('[routes] GET /api/settings error:', error);
+    return c.json({ error: 'Failed to get settings' }, 500);
+  }
+});
+
+app.put('/api/settings', async (c) => {
+  try {
+    const body = await c.req.json();
+    const updated = updateSettings(body);
+    return c.json(updated);
+  } catch (error) {
+    console.error('[routes] PUT /api/settings error:', error);
+    return c.json({ error: 'Failed to update settings' }, 500);
   }
 });

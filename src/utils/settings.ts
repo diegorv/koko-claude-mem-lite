@@ -51,3 +51,16 @@ export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
   }
   return getSettings()[key];
 }
+
+export function getAllSettings(): Settings {
+  return { ...getSettings() };
+}
+
+export function updateSettings(partial: Partial<Settings>): Settings {
+  const current = getSettings();
+  const updated = { ...current, ...partial };
+  const path = getSettingsPath();
+  writeFileSync(path, JSON.stringify(updated, null, 2));
+  cached = updated;
+  return updated;
+}

@@ -261,6 +261,32 @@ export function getObservationsByIds(ids: number[]): Observation[] {
   ).all(...ids) as Observation[];
 }
 
+// --- Delete operations ---
+
+export function deleteObservation(id: number): boolean {
+  const db = getDb();
+  // Clean up embedding if vec table exists
+  try { db.prepare('DELETE FROM observations_vec WHERE observation_id = ?').run(id); } catch {}
+  const result = db.prepare('DELETE FROM observations WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+export function deleteSummary(id: number): boolean {
+  const result = getDb().prepare('DELETE FROM summaries WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+export function deleteSession(id: number): boolean {
+  const db = getDb();
+  // Clean up embeddings for all observations in this session
+  try {
+    db.prepare('DELETE FROM observations_vec WHERE observation_id IN (SELECT id FROM observations WHERE session_id = ?)').run(id);
+  } catch {}
+  // CASCADE handles observations + summaries deletion
+  const result = db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
 export function getTimelineAroundObservation(
   anchorId: number,
   depthBefore: number = 5,
