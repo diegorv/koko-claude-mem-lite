@@ -1,0 +1,9 @@
+{
+  "name": "memory-lite",
+  "version": "0.1.0",
+  "description": "Privacy-first memory plugin for Claude Code. Captures sessions, compresses with AI, injects context.",
+  "author": {
+    "name": "Diego"
+  },
+  "license": "MIT"
+}
