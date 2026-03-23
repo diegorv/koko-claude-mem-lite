@@ -1,13 +1,12 @@
 /**
  * AI-powered observation extraction and session summarization.
- * Uses @anthropic-ai/sdk for single-turn Claude API calls.
+ * Uses @anthropic-ai/claude-agent-sdk to leverage Claude Code's own authentication
+ * (subscription billing) — no separate API key needed.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
-const client = new Anthropic();
-
-// --- XML Parser (adapted from claude-mem's src/sdk/parser.ts) ---
+// --- XML Parser ---
 
 export interface ParsedObservation {
   type: string;
@@ -80,7 +79,7 @@ function parseSummaryXml(text: string): ParsedSummary | null {
   };
 }
 
-// --- AI Calls ---
+// --- AI Calls via Claude Agent SDK ---
 
 const OBSERVATION_SYSTEM_PROMPT = `You are a development session observer. You analyze tool usage events and extract structured observations.
 
@@ -128,56 +127,60 @@ Rules:
 - Focus on actionable information
 - Output ONLY the XML block, nothing else`;
 
+/**
+ * Run a single-turn query via the Claude Agent SDK.
+ * Uses Claude Code's own authentication (subscription billing).
+ * Disables all tools so it's a pure text-in/text-out call.
+ */
+async function runQuery(systemPrompt: string, userMessage: string): Promise<string | null> {
+  try {
+    const conversation = query({
+      prompt: userMessage,
+      options: {
+        model: 'claude-sonnet-4-6',
+        systemPrompt,
+        maxTurns: 1,
+        tools: [],               // no tools — pure text generation
+        disallowedTools: ['*'],   // extra safety: disallow everything
+      },
+    });
+
+    let resultText = '';
+    for await (const message of conversation) {
+      if (message.type === 'result' && message.subtype === 'success') {
+        resultText = message.result;
+      }
+    }
+
+    return resultText || null;
+  } catch (error) {
+    console.error('[summarizer] Agent SDK query failed:', error);
+    return null;
+  }
+}
+
 export async function extractObservation(
   toolName: string,
   toolInput: string,
   toolResponse: string,
   cwd?: string
 ): Promise<ParsedObservation | null> {
-  try {
-    const userMessage = `Tool: ${toolName}
+  const userMessage = `Tool: ${toolName}
 Working directory: ${cwd || 'unknown'}
 Input: ${truncate(toolInput, 2000)}
 Output: ${truncate(toolResponse, 3000)}`;
 
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: OBSERVATION_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
-    });
+  const text = await runQuery(OBSERVATION_SYSTEM_PROMPT, userMessage);
+  if (!text) return null;
 
-    const text = response.content
-      .filter((c): c is Anthropic.TextBlock => c.type === 'text')
-      .map(c => c.text)
-      .join('\n');
-
-    return parseObservationXml(text);
-  } catch (error) {
-    console.error('[summarizer] extractObservation failed:', error);
-    return null;
-  }
+  return parseObservationXml(text);
 }
 
 export async function generateSummary(lastAssistantMessage: string): Promise<ParsedSummary | null> {
-  try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
-      system: SUMMARY_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: lastAssistantMessage }],
-    });
+  const text = await runQuery(SUMMARY_SYSTEM_PROMPT, lastAssistantMessage);
+  if (!text) return null;
 
-    const text = response.content
-      .filter((c): c is Anthropic.TextBlock => c.type === 'text')
-      .map(c => c.text)
-      .join('\n');
-
-    return parseSummaryXml(text);
-  } catch (error) {
-    console.error('[summarizer] generateSummary failed:', error);
-    return null;
-  }
+  return parseSummaryXml(text);
 }
 
 function truncate(str: string, maxLen: number): string {

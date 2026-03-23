@@ -21,10 +21,10 @@ memory-lite hooks into Claude Code's plugin lifecycle to silently observe your s
 ```
 
 1. **Session starts** → The plugin fetches recent summaries and observations from past sessions and injects them as context, giving Claude memory of previous work.
-2. **Every tool use** → The tool name, input, and output are sent to Claude Sonnet, which extracts a structured observation (type, title, facts, narrative, files read/modified).
+2. **Every tool use** → The tool name, input, and output are sent to Claude Sonnet via the [Claude Agent SDK](https://docs.anthropic.com/en/docs/claude-code/sdk), which extracts a structured observation (type, title, facts, narrative, files read/modified).
 3. **Session ends** → The last assistant message is summarized into 5 fields: what was requested, investigated, learned, completed, and what's next.
 
-All data is stored locally in a SQLite database at `~/.memory-lite/data.db`. Nothing leaves your machine except the AI extraction calls to the Anthropic API (using your existing Claude Code credentials).
+All data is stored locally in a SQLite database at `~/.memory-lite/data.db`. AI extraction uses Claude Code's own authentication (subscription billing via the Agent SDK) — **no separate API key is needed**.
 
 ## Features
 
@@ -43,8 +43,7 @@ All data is stored locally in a SQLite database at `~/.memory-lite/data.db`. Not
 ### Prerequisites
 
 - [Bun](https://bun.sh) runtime
-- Claude Code CLI (v2.x+)
-- An Anthropic API key (set as `ANTHROPIC_API_KEY` env var — the same one Claude Code uses)
+- Claude Code CLI (v2.x+) with an active subscription
 
 ### Install as a Claude Code Plugin
 
@@ -314,7 +313,7 @@ bun run worker:stop
 - **Runtime**: [Bun](https://bun.sh)
 - **Database**: SQLite (via `bun:sqlite`) with WAL mode, FTS5, and optional sqlite-vec
 - **Worker**: Express.js
-- **AI**: Anthropic Claude Sonnet (via `@anthropic-ai/sdk`)
+- **AI**: Claude Sonnet via [Claude Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) (uses Claude Code's own subscription — no API key needed)
 - **Embeddings**: Ollama (optional)
 - **Dashboard**: Svelte 5 + Vite
 - **Build**: esbuild (worker/hooks) + Vite (UI)

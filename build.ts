@@ -5,7 +5,7 @@ const shared = {
   platform: 'node' as const,
   format: 'esm' as const,
   target: 'node18',
-  external: ['bun:sqlite'],
+  external: ['bun:sqlite', '@anthropic-ai/claude-agent-sdk'],
   sourcemap: false,
   minify: false,
 };
