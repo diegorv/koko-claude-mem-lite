@@ -3,9 +3,11 @@ import {
   createSession, completeSession, getSessionByContentId,
   storeObservation, storeSummary,
   getRecentObservations, getRecentSummaries,
-  searchObservationsFts,
+  searchObservationsFts, searchObservationsIndex,
+  getObservationsByIds, getTimelineAroundObservation,
   type ObservationInput,
 } from '../db/queries.js';
+import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext } from '../context/generator.js';
 import { extractObservation, generateSummary } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
@@ -299,6 +301,70 @@ router.get('/api/dashboard/feed', (req, res) => {
   } catch (error) {
     console.error('[routes] /api/dashboard/feed error:', error);
     res.status(500).json({ error: 'Failed to get feed' });
+  }
+});
+
+// --- Progressive Disclosure API ---
+
+// Layer 1: Compact search index (~50-100 tokens per result)
+router.get('/api/search/index', (req, res) => {
+  try {
+    const q = req.query.q as string;
+    if (!q) return res.status(400).json({ error: 'q parameter required' });
+
+    const results = searchObservationsIndex({
+      query: q,
+      project: req.query.project as string | undefined,
+      type: req.query.type as string | undefined,
+      dateStart: req.query.dateStart as string | undefined,
+      dateEnd: req.query.dateEnd as string | undefined,
+      limit: parseInt(req.query.limit as string) || 20,
+      offset: parseInt(req.query.offset as string) || 0,
+    });
+
+    const formatted = formatSearchIndex(results);
+    res.json({ content: [{ type: 'text', text: formatted }] });
+  } catch (error) {
+    console.error('[routes] /api/search/index error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Layer 2: Timeline context around an observation
+router.get('/api/timeline', (req, res) => {
+  try {
+    const anchorId = parseInt(req.query.anchor as string);
+    if (isNaN(anchorId)) return res.status(400).json({ error: 'anchor parameter required (observation ID)' });
+
+    const depthBefore = parseInt(req.query.depth_before as string) || 5;
+    const depthAfter = parseInt(req.query.depth_after as string) || 5;
+    const project = req.query.project as string | undefined;
+
+    const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
+    if (!anchor) return res.status(404).json({ error: 'Observation not found' });
+
+    const formatted = formatTimeline(before, anchor, after);
+    res.json({ content: [{ type: 'text', text: formatted }] });
+  } catch (error) {
+    console.error('[routes] /api/timeline error:', error);
+    res.status(500).json({ error: 'Timeline failed' });
+  }
+});
+
+// Layer 3: Full observation details by IDs
+router.post('/api/observations/batch', (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array required' });
+    }
+
+    const observations = getObservationsByIds(ids.map(Number));
+    const formatted = formatObservationsFull(observations);
+    res.json({ content: [{ type: 'text', text: formatted }] });
+  } catch (error) {
+    console.error('[routes] /api/observations/batch error:', error);
+    res.status(500).json({ error: 'Batch fetch failed' });
   }
 });
 

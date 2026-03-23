@@ -27,7 +27,15 @@ async function main() {
     banner: { js: '#!/usr/bin/env bun' },
   });
 
-  console.log('Build complete: plugin/scripts/hook.js, plugin/scripts/worker.js');
+  // MCP server (bundles MCP SDK for self-contained plugin)
+  await build({
+    ...shared,
+    entryPoints: ['src/mcp/server.ts'],
+    outfile: 'plugin/scripts/mcp-server.js',
+    banner: { js: '#!/usr/bin/env bun' },
+  });
+
+  console.log('Build complete: plugin/scripts/hook.js, plugin/scripts/worker.js, plugin/scripts/mcp-server.js');
 }
 
 main().catch((err) => {

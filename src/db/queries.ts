@@ -202,3 +202,100 @@ export function searchObservationsFts(query: string, project?: string, limit: nu
      LIMIT ?`
   ).all(query, limit) as SearchResult[];
 }
+
+// --- Progressive Disclosure Search ---
+
+export interface SearchIndexResult {
+  id: number;
+  type: string;
+  title: string | null;
+  narrative: string | null;
+  facts: string | null;
+  created_at: string;
+  rank: number;
+}
+
+export interface SearchIndexFilters {
+  query: string;
+  project?: string;
+  type?: string;
+  dateStart?: string;
+  dateEnd?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function searchObservationsIndex(filters: SearchIndexFilters): SearchIndexResult[] {
+  const db = getDb();
+  const limit = filters.limit || 20;
+  const offset = filters.offset || 0;
+
+  const conditions: string[] = ['observations_fts MATCH ?'];
+  const params: any[] = [filters.query];
+
+  if (filters.project) {
+    conditions.push('o.project = ?');
+    params.push(filters.project);
+  }
+  if (filters.type) {
+    conditions.push('o.type = ?');
+    params.push(filters.type);
+  }
+  if (filters.dateStart) {
+    conditions.push('o.created_at >= ?');
+    params.push(filters.dateStart);
+  }
+  if (filters.dateEnd) {
+    conditions.push('o.created_at <= ?');
+    params.push(filters.dateEnd);
+  }
+
+  params.push(limit, offset);
+
+  return db.query(
+    `SELECT o.id, o.type, o.title, o.narrative, o.facts, o.created_at, f.rank
+     FROM observations_fts f
+     JOIN observations o ON o.id = f.rowid
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY f.rank
+     LIMIT ? OFFSET ?`
+  ).all(...params) as SearchIndexResult[];
+}
+
+export function getObservationsByIds(ids: number[]): Observation[] {
+  if (ids.length === 0) return [];
+  const db = getDb();
+  const placeholders = ids.map(() => '?').join(',');
+  return db.query(
+    `SELECT * FROM observations WHERE id IN (${placeholders}) ORDER BY created_at_epoch ASC`
+  ).all(...ids) as Observation[];
+}
+
+export function getTimelineAroundObservation(
+  anchorId: number,
+  depthBefore: number = 5,
+  depthAfter: number = 5,
+  project?: string
+): { anchor: Observation | null; before: Observation[]; after: Observation[] } {
+  const db = getDb();
+
+  const anchor = db.query('SELECT * FROM observations WHERE id = ?').get(anchorId) as Observation | null;
+  if (!anchor) return { anchor: null, before: [], after: [] };
+
+  const projectFilter = project ? 'AND project = ?' : '';
+  const projectParams = project ? [project] : [];
+
+  const before = db.query(
+    `SELECT * FROM observations
+     WHERE created_at_epoch < ? ${projectFilter}
+     ORDER BY created_at_epoch DESC LIMIT ?`
+  ).all(anchor.created_at_epoch, ...projectParams, depthBefore) as Observation[];
+
+  const after = db.query(
+    `SELECT * FROM observations
+     WHERE created_at_epoch > ? ${projectFilter}
+     ORDER BY created_at_epoch ASC LIMIT ?`
+  ).all(anchor.created_at_epoch, ...projectParams, depthAfter) as Observation[];
+
+  return { anchor, before: before.reverse(), after };
+}
