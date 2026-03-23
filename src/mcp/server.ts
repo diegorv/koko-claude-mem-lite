@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * memory-lite MCP Search Server
  *
