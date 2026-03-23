@@ -183,6 +183,9 @@ async function main(): Promise<void> {
   const input = normalizeInput(raw);
 
   switch (event) {
+    case 'start':
+      await handleStart();
+      break;
     case 'context':
       await handleContext(input);
       break;
