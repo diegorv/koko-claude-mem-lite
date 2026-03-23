@@ -186,24 +186,27 @@ async function ensureWorker() {
   const health = await workerFetch("/api/health");
   return health !== null && health.ok;
 }
+async function handleStart() {
+  if (await ensureWorker()) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join2(dirname(fileURLToPath(import.meta.url)), "..");
+  const workerScript = join2(pluginRoot, "scripts", "worker.mjs");
+  try {
+    const child = spawn("node", [workerScript], {
+      stdio: "ignore",
+      detached: true,
+      env: process.env
+    });
+    child.unref();
+    await new Promise((r) => setTimeout(r, 2e3));
+  } catch {
+  }
+  console.log(JSON.stringify(formatSilentOutput()));
+}
 async function handleContext(input) {
   const project = getProjectName(input.cwd);
-  if (!await ensureWorker()) {
-    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join2(dirname(fileURLToPath(import.meta.url)), "..");
-    const workerScript = join2(pluginRoot, "scripts", "worker.mjs");
-    try {
-      const child = spawn("node", [workerScript], {
-        stdio: "ignore",
-        detached: true,
-        env: process.env
-      });
-      child.unref();
-      await new Promise((r) => setTimeout(r, 1500));
-    } catch {
-      console.log(JSON.stringify(formatSilentOutput()));
-      return;
-    }
-  }
   const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
   if (!res || !res.ok) {
     console.log(JSON.stringify(formatSilentOutput()));
@@ -301,6 +304,9 @@ async function main() {
   const raw = await readJsonFromStdin();
   const input = normalizeInput(raw);
   switch (event) {
+    case "start":
+      await handleStart();
+      break;
     case "context":
       await handleContext(input);
       break;
