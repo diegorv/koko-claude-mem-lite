@@ -147,6 +147,141 @@ router.post('/api/sessions/complete', (req, res) => {
   }
 });
 
+// --- Dashboard API routes ---
+
+// List all sessions (with summary + observation count)
+router.get('/api/dashboard/sessions', (req, res) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const db = getDb();
+
+    const whereClause = project ? 'WHERE s.project = ?' : '';
+    const params = project ? [project, limit, offset] : [limit, offset];
+
+    const sessions = db.query(`
+      SELECT s.*,
+        (SELECT COUNT(*) FROM observations o WHERE o.session_id = s.id) as observation_count,
+        json_object(
+          'request', sm.request,
+          'investigated', sm.investigated,
+          'learned', sm.learned,
+          'completed', sm.completed,
+          'next_steps', sm.next_steps
+        ) as summary
+      FROM sessions s
+      LEFT JOIN summaries sm ON sm.session_id = s.id
+      ${whereClause}
+      ORDER BY s.created_at_epoch DESC
+      LIMIT ? OFFSET ?
+    `).all(...params);
+
+    const total = db.query(`SELECT COUNT(*) as count FROM sessions ${project ? 'WHERE project = ?' : ''}`).get(...(project ? [project] : [])) as { count: number };
+
+    res.json({ sessions, total: total.count });
+  } catch (error) {
+    console.error('[routes] /api/dashboard/sessions error:', error);
+    res.status(500).json({ error: 'Failed to list sessions' });
+  }
+});
+
+// Get observations for a session
+router.get('/api/dashboard/sessions/:sessionId/observations', (req, res) => {
+  try {
+    const sessionId = parseInt(req.params.sessionId);
+    const db = getDb();
+    const observations = db.query(
+      'SELECT * FROM observations WHERE session_id = ? ORDER BY created_at_epoch ASC'
+    ).all(sessionId);
+    res.json({ observations });
+  } catch (error) {
+    console.error('[routes] /api/dashboard/observations error:', error);
+    res.status(500).json({ error: 'Failed to list observations' });
+  }
+});
+
+// List all projects
+router.get('/api/dashboard/projects', (_req, res) => {
+  try {
+    const db = getDb();
+    const projects = db.query(`
+      SELECT project, COUNT(*) as session_count,
+        MAX(created_at) as last_active
+      FROM sessions
+      GROUP BY project
+      ORDER BY last_active DESC
+    `).all();
+    res.json({ projects });
+  } catch (error) {
+    console.error('[routes] /api/dashboard/projects error:', error);
+    res.status(500).json({ error: 'Failed to list projects' });
+  }
+});
+
+// Stats
+router.get('/api/dashboard/stats', (_req, res) => {
+  try {
+    const db = getDb();
+    const sessions = db.query('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
+    const observations = db.query('SELECT COUNT(*) as count FROM observations').get() as { count: number };
+    const summaries = db.query('SELECT COUNT(*) as count FROM summaries').get() as { count: number };
+    const projects = db.query('SELECT COUNT(DISTINCT project) as count FROM sessions').get() as { count: number };
+    res.json({
+      sessions: sessions.count,
+      observations: observations.count,
+      summaries: summaries.count,
+      projects: projects.count,
+    });
+  } catch (error) {
+    console.error('[routes] /api/dashboard/stats error:', error);
+    res.status(500).json({ error: 'Failed to get stats' });
+  }
+});
+
+// Recent feed (mixed observations + summaries, chronological)
+router.get('/api/dashboard/feed', (req, res) => {
+  try {
+    const project = req.query.project as string | undefined;
+    const limit = parseInt(req.query.limit as string) || 30;
+    const before = req.query.before as string | undefined;
+    const db = getDb();
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (project) { conditions.push('project = ?'); params.push(project); }
+    if (before) { conditions.push('created_at_epoch < ?'); params.push(parseInt(before)); }
+
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    const observations = db.query(`
+      SELECT id, session_id, project, type, title, facts, narrative,
+        files_read, files_modified, created_at, created_at_epoch,
+        'observation' as item_type
+      FROM observations ${where}
+      ORDER BY created_at_epoch DESC LIMIT ?
+    `).all(...params, limit);
+
+    const summaries = db.query(`
+      SELECT id, session_id, project, request, investigated, learned,
+        completed, next_steps, created_at, created_at_epoch,
+        'summary' as item_type
+      FROM summaries ${where}
+      ORDER BY created_at_epoch DESC LIMIT ?
+    `).all(...params, limit);
+
+    const feed = [...observations, ...summaries]
+      .sort((a: any, b: any) => b.created_at_epoch - a.created_at_epoch)
+      .slice(0, limit);
+
+    res.json({ feed });
+  } catch (error) {
+    console.error('[routes] /api/dashboard/feed error:', error);
+    res.status(500).json({ error: 'Failed to get feed' });
+  }
+});
+
 // Search (FTS5 or semantic)
 router.get('/api/search', async (req, res) => {
   try {

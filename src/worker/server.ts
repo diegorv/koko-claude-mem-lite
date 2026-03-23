@@ -1,13 +1,27 @@
 import express from 'express';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { router } from './routes.js';
 import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
 import { closeDb } from '../db/database.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 app.use(router);
+
+// Serve dashboard UI
+const uiPath = join(__dirname, '..', 'ui');
+if (existsSync(uiPath)) {
+  app.use(express.static(uiPath));
+  app.get('/', (_req, res) => {
+    res.sendFile(join(uiPath, 'index.html'));
+  });
+}
 
 const port = getSetting('WORKER_PORT');
 const pidPath = getPidPath();
