@@ -34,30 +34,33 @@ async function ensureWorker(): Promise<boolean> {
 
 // --- Handlers ---
 
+async function handleStart(): Promise<void> {
+  if (await ensureWorker()) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..');
+  const workerScript = join(pluginRoot, 'scripts', 'worker.mjs');
+
+  try {
+    const child = spawn('node', [workerScript], {
+      stdio: 'ignore',
+      detached: true,
+      env: process.env,
+    });
+    child.unref();
+    // Wait for worker to be ready
+    await new Promise(r => setTimeout(r, 2000));
+  } catch {
+    // Can't spawn
+  }
+
+  console.log(JSON.stringify(formatSilentOutput()));
+}
+
 async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<void> {
   const project = getProjectName(input.cwd);
-
-  // Ensure worker is running, spawn if needed
-  if (!await ensureWorker()) {
-    // Try to spawn worker in background
-    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..');
-    const workerScript = join(pluginRoot, 'scripts', 'worker.mjs');
-
-    try {
-      const child = spawn('node', [workerScript], {
-        stdio: 'ignore',
-        detached: true,
-        env: process.env,
-      });
-      child.unref();
-      // Wait briefly for worker to start
-      await new Promise(r => setTimeout(r, 1500));
-    } catch {
-      // Can't spawn — output empty context
-      console.log(JSON.stringify(formatSilentOutput()));
-      return;
-    }
-  }
 
   const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
   if (!res || !res.ok) {
