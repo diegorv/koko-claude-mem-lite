@@ -3,6 +3,7 @@
   let { item }: { item: FeedItem } = $props();
 
   let viewMode: 'narrative' | 'facts' = $state('narrative');
+  let copiedId = $state('');
 
   function parseJson(s: string | null | undefined): any[] {
     if (!s) return [];
@@ -38,6 +39,15 @@
     <span class="project-name">{item.project}</span>
     <span class="item-id">#{item.id}</span>
     <span class="timestamp">{formatTime(item.created_at)}</span>
+    {#if item.content_session_id}
+      <button class="resume-btn" title="Copy resume command" onclick={() => {
+        navigator.clipboard.writeText(`claude --resume ${item.content_session_id}`);
+        copiedId = item.content_session_id!;
+        setTimeout(() => copiedId = '', 2000);
+      }}>
+        {copiedId === item.content_session_id ? 'copied!' : 'resume'}
+      </button>
+    {/if}
   </div>
 
   {#if item.item_type === 'observation'}

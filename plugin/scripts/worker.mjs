@@ -3814,18 +3814,24 @@ app.get("/api/dashboard/feed", (c) => {
     }
     const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
     const obs = db2.prepare(`
-      SELECT id, session_id, project, type, title, facts, narrative,
-        files_read, files_modified, created_at, created_at_epoch,
+      SELECT o.id, o.session_id, o.project, o.type, o.title, o.facts, o.narrative,
+        o.files_read, o.files_modified, o.created_at, o.created_at_epoch,
+        s.content_session_id,
         'observation' as item_type
-      FROM observations ${where}
-      ORDER BY created_at_epoch DESC LIMIT ?
+      FROM observations o
+      JOIN sessions s ON s.id = o.session_id
+      ${where ? where.replace(/project/g, "o.project").replace(/created_at_epoch/g, "o.created_at_epoch") : ""}
+      ORDER BY o.created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
     const sums = db2.prepare(`
-      SELECT id, session_id, project, request, investigated, learned,
-        completed, next_steps, created_at, created_at_epoch,
+      SELECT sm.id, sm.session_id, sm.project, sm.request, sm.investigated, sm.learned,
+        sm.completed, sm.next_steps, sm.created_at, sm.created_at_epoch,
+        s.content_session_id,
         'summary' as item_type
-      FROM summaries ${where}
-      ORDER BY created_at_epoch DESC LIMIT ?
+      FROM summaries sm
+      JOIN sessions s ON s.id = sm.session_id
+      ${where ? where.replace(/project/g, "sm.project").replace(/created_at_epoch/g, "sm.created_at_epoch") : ""}
+      ORDER BY sm.created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
     const feed = [...obs, ...sums].sort((a, b) => b.created_at_epoch - a.created_at_epoch).slice(0, limit);
     return c.json({ feed });

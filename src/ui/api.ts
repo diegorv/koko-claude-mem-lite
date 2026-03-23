@@ -52,6 +52,7 @@ export interface Observation {
 export interface FeedItem {
   id: number;
   session_id: number;
+  content_session_id?: string;
   project: string;
   created_at: string;
   created_at_epoch: number;
