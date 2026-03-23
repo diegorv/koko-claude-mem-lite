@@ -9,8 +9,9 @@ import { stripPrivateTags } from '../utils/privacy.js';
 import { getProjectName } from '../utils/paths.js';
 import { getSetting } from '../utils/settings.js';
 import { readFileSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { join, dirname } from 'path';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 
 const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
@@ -27,15 +28,42 @@ async function workerFetch(path: string, options?: RequestInit): Promise<Respons
   }
 }
 
-async function ensureWorker(): Promise<boolean> {
-  const health = await workerFetch('/api/health');
-  return health !== null && health.ok;
+async function waitForHealth(timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${WORKER_BASE}/api/health`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) return true;
+    } catch {
+      // not ready yet
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
+function ensureDeps(pluginRoot: string): boolean {
+  if (existsSync(join(pluginRoot, 'node_modules', 'better-sqlite3'))) return true;
+  try {
+    console.error('[memory-lite] Installing dependencies...');
+    execSync('npm install --omit=dev', {
+      cwd: pluginRoot,
+      stdio: ['pipe', 'pipe', 'inherit'],
+      timeout: 120_000,
+    });
+    console.error('[memory-lite] Dependencies installed.');
+    return existsSync(join(pluginRoot, 'node_modules', 'better-sqlite3'));
+  } catch (err: any) {
+    console.error('[memory-lite] npm install failed:', err.message);
+    return false;
+  }
 }
 
 // --- Handlers ---
 
 async function handleStart(): Promise<void> {
-  if (await ensureWorker()) {
+  // Already running?
+  if (await waitForHealth(1000)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
@@ -43,17 +71,38 @@ async function handleStart(): Promise<void> {
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..');
   const workerScript = join(pluginRoot, 'scripts', 'worker.mjs');
 
+  // Ensure native deps exist before spawning
+  if (!ensureDeps(pluginRoot)) {
+    console.error('[memory-lite] Cannot start worker: dependencies missing');
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+
+  // Spawn detached worker daemon
   try {
-    const child = spawn('node', [workerScript], {
+    const child = spawn(process.execPath, [workerScript], {
       stdio: 'ignore',
       detached: true,
-      env: process.env,
+      env: { ...process.env, MEMORY_LITE_PORT: String(getSetting('WORKER_PORT')) },
     });
+
+    if (child.pid === undefined) {
+      console.error('[memory-lite] Failed to spawn worker: no PID');
+      console.log(JSON.stringify(formatSilentOutput()));
+      return;
+    }
+
     child.unref();
-    // Wait for worker to be ready
-    await new Promise(r => setTimeout(r, 2000));
-  } catch {
-    // Can't spawn
+  } catch (err: any) {
+    console.error('[memory-lite] Failed to spawn worker:', err.message);
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+
+  // Wait for worker to become healthy (poll, don't blindly sleep)
+  const healthy = await waitForHealth(10_000);
+  if (!healthy) {
+    console.error('[memory-lite] Worker spawned but health check timed out');
   }
 
   console.log(JSON.stringify(formatSilentOutput()));

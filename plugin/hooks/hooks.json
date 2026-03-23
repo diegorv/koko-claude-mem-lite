@@ -15,8 +15,13 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|clear|compact",
+        "matcher": "*",
         "hooks": [
+          {
+            "type": "command",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/setup.mjs\"",
+            "timeout": 300
+          },
           {
             "type": "command",
             "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.mjs\" start",
