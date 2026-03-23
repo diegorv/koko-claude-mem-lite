@@ -7,6 +7,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.mjs\" start",
+            "timeout": 60
+          },
+          {
+            "type": "command",
             "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.mjs\" context",
             "timeout": 30
           }
