@@ -1,16 +1,14 @@
 import { build } from 'esbuild';
 
-const external = ['better-sqlite3', 'sqlite-vec', '@anthropic-ai/claude-agent-sdk'];
-
 const shared = {
   bundle: true,
   platform: 'node' as const,
   format: 'esm' as const,
   target: 'node18',
-  external,
+  external: ['better-sqlite3', 'sqlite-vec', '@anthropic-ai/claude-agent-sdk'],
   sourcemap: false,
   minify: false,
-  banner: { js: '#!/usr/bin/env node\nimport{createRequire}from"module";import{fileURLToPath as __f}from"url";import{dirname as __d}from"path";const require=createRequire(import.meta.url);const __filename=__f(import.meta.url);const __dirname=__d(__filename);' },
+  banner: { js: '#!/usr/bin/env node' },
 };
 
 async function main() {
