@@ -1,0 +1,21 @@
+{
+  "name": "memory-lite-plugin",
+  "version": "0.1.0",
+  "description": "Privacy-first memory plugin for Claude Code",
+  "type": "module",
+  "scripts": {
+    "build": "bun build.ts",
+    "worker:start": "bun plugin/scripts/worker.js",
+    "worker:stop": "kill $(cat ~/.memory-lite/worker.pid) 2>/dev/null || true"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.27.2",
+    "typescript": "^5.3.0"
+  }
+}
