@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import{createRequire}from"module";const require=createRequire(import.meta.url);
 
 // src/hooks/stdin.ts
 var SAFETY_TIMEOUT_MS = 3e4;
