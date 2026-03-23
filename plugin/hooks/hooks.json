@@ -1,6 +1,18 @@
 {
   "description": "Memory-lite plugin hooks",
   "hooks": {
+    "Setup": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/setup.mjs\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|clear|compact",

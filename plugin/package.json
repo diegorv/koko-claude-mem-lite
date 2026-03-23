@@ -1,0 +1,10 @@
+{
+  "name": "memory-lite",
+  "version": "0.1.0",
+  "description": "Privacy-first memory plugin for Claude Code",
+  "type": "module",
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "sqlite-vec": "^0.1.7"
+  }
+}
