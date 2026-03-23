@@ -2,6 +2,8 @@
   import type { FeedItem } from '../api';
   let { item }: { item: FeedItem } = $props();
 
+  let viewMode: 'narrative' | 'facts' = $state('narrative');
+
   function parseJson(s: string | null | undefined): any[] {
     if (!s) return [];
     try { return JSON.parse(s); } catch { return []; }
@@ -24,7 +26,6 @@
   let facts = $derived(parseJson(item.facts));
   let filesRead = $derived(parseJson(item.files_read));
   let filesModified = $derived(parseJson(item.files_modified));
-  let allFiles = $derived([...filesModified, ...filesRead.filter((f: string) => !filesModified.includes(f))]);
 </script>
 
 <div class="feed-item">
@@ -35,6 +36,7 @@
       <span class="badge summary">summary</span>
     {/if}
     <span class="project-name">{item.project}</span>
+    <span class="item-id">#{item.id}</span>
     <span class="timestamp">{formatTime(item.created_at)}</span>
   </div>
 
@@ -42,26 +44,56 @@
     {#if item.title}
       <div class="title">{item.title}</div>
     {/if}
-    {#if item.narrative}
-      <div class="narrative">{item.narrative}</div>
+
+    {#if item.narrative || facts.length > 0}
+      <div class="view-toggle">
+        {#if item.narrative}
+          <button class:active={viewMode === 'narrative'} onclick={() => viewMode = 'narrative'}>Narrative</button>
+        {/if}
+        {#if facts.length > 0}
+          <button class:active={viewMode === 'facts'} onclick={() => viewMode = 'facts'}>Facts ({facts.length})</button>
+        {/if}
+      </div>
     {/if}
-    {#if facts.length > 0}
+
+    {#if viewMode === 'narrative' && item.narrative}
+      <div class="narrative">{item.narrative}</div>
+    {:else if viewMode === 'facts' && facts.length > 0}
       <ul class="facts">
         {#each facts as fact}
           <li>{fact}</li>
         {/each}
       </ul>
     {/if}
-    {#if allFiles.length > 0}
-      <div class="files">
-        {#each allFiles.slice(0, 6) as file}
-          <span class="file-tag" title={file}>{file.split('/').pop()}</span>
-        {/each}
-        {#if allFiles.length > 6}
-          <span class="file-tag">+{allFiles.length - 6}</span>
-        {/if}
+
+    {#if filesModified.length > 0}
+      <div class="file-group">
+        <span class="file-group-label modified">modified</span>
+        <div class="files">
+          {#each filesModified.slice(0, 5) as file}
+            <span class="file-tag modified" title={file}>{file.split('/').pop()}</span>
+          {/each}
+          {#if filesModified.length > 5}
+            <span class="file-tag">+{filesModified.length - 5}</span>
+          {/if}
+        </div>
       </div>
     {/if}
+
+    {#if filesRead.length > 0}
+      <div class="file-group">
+        <span class="file-group-label read">read</span>
+        <div class="files">
+          {#each filesRead.slice(0, 5) as file}
+            <span class="file-tag" title={file}>{file.split('/').pop()}</span>
+          {/each}
+          {#if filesRead.length > 5}
+            <span class="file-tag">+{filesRead.length - 5}</span>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
   {:else}
     {#if item.request}
       <div class="title">{item.request}</div>
@@ -69,25 +101,25 @@
     <div class="summary-sections">
       {#if item.investigated}
         <div class="summary-section">
-          <div class="section-label">Investigated</div>
+          <div class="section-label">&#128269; Investigated</div>
           <div class="section-content">{item.investigated}</div>
         </div>
       {/if}
       {#if item.learned}
         <div class="summary-section">
-          <div class="section-label">Learned</div>
+          <div class="section-label">&#128161; Learned</div>
           <div class="section-content">{item.learned}</div>
         </div>
       {/if}
       {#if item.completed}
         <div class="summary-section">
-          <div class="section-label">Completed</div>
+          <div class="section-label">&#9989; Completed</div>
           <div class="section-content">{item.completed}</div>
         </div>
       {/if}
       {#if item.next_steps}
         <div class="summary-section">
-          <div class="section-label">Next Steps</div>
+          <div class="section-label">&#10145; Next Steps</div>
           <div class="section-content">{item.next_steps}</div>
         </div>
       {/if}

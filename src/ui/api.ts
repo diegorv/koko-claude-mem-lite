@@ -8,9 +8,13 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 export interface Stats {
   sessions: number;
+  activeSessions: number;
   observations: number;
   summaries: number;
   projects: number;
+  types: { type: string; count: number }[];
+  daily: { day: string; count: number }[];
+  uptime: number;
 }
 
 export interface Project {

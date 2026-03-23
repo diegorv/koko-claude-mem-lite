@@ -224,14 +224,34 @@ router.get('/api/dashboard/stats', (_req, res) => {
   try {
     const db = getDb();
     const sessions = db.query('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
+    const activeSessions = db.query("SELECT COUNT(*) as count FROM sessions WHERE status = 'active'").get() as { count: number };
     const observations = db.query('SELECT COUNT(*) as count FROM observations').get() as { count: number };
     const summaries = db.query('SELECT COUNT(*) as count FROM summaries').get() as { count: number };
     const projects = db.query('SELECT COUNT(DISTINCT project) as count FROM sessions').get() as { count: number };
+
+    // Type breakdown
+    const types = db.query(
+      "SELECT type, COUNT(*) as count FROM observations GROUP BY type ORDER BY count DESC"
+    ).all() as { type: string; count: number }[];
+
+    // Recent activity (observations per day, last 7 days)
+    const daily = db.query(`
+      SELECT date(created_at) as day, COUNT(*) as count
+      FROM observations
+      WHERE created_at_epoch > ?
+      GROUP BY date(created_at)
+      ORDER BY day ASC
+    `).all(Date.now() - 7 * 86400000) as { day: string; count: number }[];
+
     res.json({
       sessions: sessions.count,
+      activeSessions: activeSessions.count,
       observations: observations.count,
       summaries: summaries.count,
       projects: projects.count,
+      types,
+      daily,
+      uptime: Math.floor(process.uptime()),
     });
   } catch (error) {
     console.error('[routes] /api/dashboard/stats error:', error);
