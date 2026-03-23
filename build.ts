@@ -1,41 +1,51 @@
 import { build } from 'esbuild';
 
-const shared = {
-  bundle: true,
-  platform: 'node' as const,
-  format: 'esm' as const,
-  target: 'node18',
-  external: ['better-sqlite3', 'sqlite-vec', '@anthropic-ai/claude-agent-sdk'],
-  sourcemap: false,
-  minify: false,
-};
+const external = ['better-sqlite3', 'sqlite-vec', '@anthropic-ai/claude-agent-sdk'];
 
 async function main() {
-  // Hook entry point
+  // Hook entry point (CJS)
   await build({
-    ...shared,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node18',
+    external,
+    sourcemap: false,
+    minify: false,
     entryPoints: ['src/hooks/hook.ts'],
-    outfile: 'plugin/scripts/hook.js',
+    outfile: 'plugin/scripts/hook.cjs',
     banner: { js: '#!/usr/bin/env node' },
   });
 
-  // Worker server
+  // Worker server (CJS — Express is CJS)
   await build({
-    ...shared,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node18',
+    external,
+    sourcemap: false,
+    minify: false,
     entryPoints: ['src/worker/server.ts'],
-    outfile: 'plugin/scripts/worker.js',
+    outfile: 'plugin/scripts/worker.cjs',
     banner: { js: '#!/usr/bin/env node' },
   });
 
-  // MCP server (bundles MCP SDK for self-contained plugin)
+  // MCP server (ESM — MCP SDK is ESM-only)
   await build({
-    ...shared,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node18',
+    external,
+    sourcemap: false,
+    minify: false,
     entryPoints: ['src/mcp/server.ts'],
-    outfile: 'plugin/scripts/mcp-server.js',
+    outfile: 'plugin/scripts/mcp-server.mjs',
     banner: { js: '#!/usr/bin/env node' },
   });
 
-  console.log('Build complete: plugin/scripts/hook.js, plugin/scripts/worker.js, plugin/scripts/mcp-server.js');
+  console.log('Build complete.');
 }
 
 main().catch((err) => {

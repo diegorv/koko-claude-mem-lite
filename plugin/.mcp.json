@@ -2,7 +2,8 @@
   "mcpServers": {
     "memory-lite-search": {
       "type": "stdio",
-      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.js"
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs"]
     }
   }
 }

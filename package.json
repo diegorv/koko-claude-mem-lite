@@ -8,7 +8,7 @@
     "build:worker": "npx tsx build.ts",
     "build:ui": "vite build",
     "dev:ui": "vite",
-    "worker:start": "node plugin/scripts/worker.js",
+    "worker:start": "node plugin/scripts/worker.cjs",
     "worker:stop": "kill $(cat ~/.memory-lite/worker.pid) 2>/dev/null || true"
   },
   "dependencies": {

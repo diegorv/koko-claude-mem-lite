@@ -9,6 +9,8 @@ import { stripPrivateTags } from '../utils/privacy.js';
 import { getProjectName } from '../utils/paths.js';
 import { getSetting } from '../utils/settings.js';
 import { readFileSync } from 'fs';
+import { spawn } from 'child_process';
+import { join, dirname } from 'path';
 
 const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
 
@@ -37,16 +39,16 @@ async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<
   // Ensure worker is running, spawn if needed
   if (!await ensureWorker()) {
     // Try to spawn worker in background
-    const workerPath = new URL('../worker/server.js', import.meta.url).pathname
-      .replace('/hooks/../worker/', '/worker/');
-    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || new URL('../../plugin', import.meta.url).pathname;
-    const workerScript = `${pluginRoot}/scripts/worker.js`;
+    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || dirname(__dirname);
+    const workerScript = join(pluginRoot, 'scripts', 'worker.cjs');
 
     try {
-      Bun.spawn(['bun', workerScript], {
-        stdio: ['ignore', 'ignore', 'ignore'],
+      const child = spawn('node', [workerScript], {
+        stdio: 'ignore',
+        detached: true,
         env: process.env,
       });
+      child.unref();
       // Wait briefly for worker to start
       await new Promise(r => setTimeout(r, 1500));
     } catch {
