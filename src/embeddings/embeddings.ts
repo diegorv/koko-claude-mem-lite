@@ -3,7 +3,7 @@
  * Graceful degradation: if Ollama is unavailable, operations silently skip.
  */
 
-import { Database } from 'bun:sqlite';
+import type Database from 'better-sqlite3';
 import { getSetting } from '../utils/settings.js';
 
 /**
@@ -36,12 +36,11 @@ export async function generateEmbedding(text: string): Promise<Float32Array | nu
 /**
  * Store embedding for an observation.
  */
-export function storeEmbedding(db: Database, observationId: number, embedding: Float32Array): boolean {
+export function storeEmbedding(db: Database.Database, observationId: number, embedding: Float32Array): boolean {
   try {
-    db.run(
-      'INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (?, ?)',
-      [observationId, embedding]
-    );
+    db.prepare(
+      'INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))'
+    ).run(observationId, Buffer.from(embedding.buffer));
     return true;
   } catch (error) {
     console.error('[embeddings] Failed to store embedding:', error);
@@ -53,7 +52,7 @@ export function storeEmbedding(db: Database, observationId: number, embedding: F
  * Semantic search: find observations similar to the query text.
  */
 export async function searchSemantic(
-  db: Database,
+  db: Database.Database,
   query: string,
   limit: number = 10
 ): Promise<{ observationId: number; distance: number }[]> {
@@ -61,13 +60,13 @@ export async function searchSemantic(
   if (!embedding) return [];
 
   try {
-    const results = db.query(
+    const results = db.prepare(
       `SELECT observation_id, distance
        FROM observations_vec
-       WHERE embedding MATCH ?
+       WHERE embedding MATCH vec_f32(?)
        ORDER BY distance
        LIMIT ?`
-    ).all(embedding, limit) as { observation_id: number; distance: number }[];
+    ).all(Buffer.from(embedding.buffer), limit) as { observation_id: number; distance: number }[];
 
     return results.map(r => ({
       observationId: r.observation_id,
@@ -84,7 +83,7 @@ export async function searchSemantic(
  * Combines title + narrative + facts into a single text for embedding.
  */
 export async function embedObservation(
-  db: Database,
+  db: Database.Database,
   observationId: number,
   title: string | null,
   narrative: string | null,

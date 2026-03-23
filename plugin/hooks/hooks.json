@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; bun \"$_R/scripts/hook.js\" context",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.js\" context",
             "timeout": 30
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; bun \"$_R/scripts/hook.js\" session-init",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.js\" session-init",
             "timeout": 30
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; bun \"$_R/scripts/hook.js\" observation",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.js\" observation",
             "timeout": 120
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; bun \"$_R/scripts/hook.js\" summarize",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.js\" summarize",
             "timeout": 60
           }
         ]
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; bun \"$_R/scripts/hook.js\" session-end",
+            "command": "_R=\"${CLAUDE_PLUGIN_ROOT}\"; node \"$_R/scripts/hook.js\" session-end",
             "timeout": 15
           }
         ]

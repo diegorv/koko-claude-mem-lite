@@ -1,8 +1,10 @@
-import { Database } from 'bun:sqlite';
-import { existsSync } from 'fs';
+import Database from 'better-sqlite3';
+import { getLoadablePath } from 'sqlite-vec';
 import { getDbPath, getDataDir } from '../utils/paths.js';
 
-let db: Database | null = null;
+export type { Database };
+
+let db: Database.Database | null = null;
 
 const SCHEMA_VERSION = 1;
 
@@ -78,53 +80,41 @@ CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
 END;
 `;
 
-function initializeSchema(database: Database): void {
-  database.run('PRAGMA journal_mode = WAL');
-  database.run('PRAGMA foreign_keys = ON');
-  database.run('PRAGMA cache_size = 10000');
+function initializeSchema(database: Database.Database): void {
+  database.pragma('journal_mode = WAL');
+  database.pragma('foreign_keys = ON');
+  database.pragma('cache_size = 10000');
 
   const versionRow = (() => {
     try {
-      return database.query('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | null;
+      return database.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined;
     } catch {
-      return null;
+      return undefined;
     }
   })();
 
   if (!versionRow || versionRow.version < SCHEMA_VERSION) {
     database.exec(SCHEMA_SQL);
-    database.run('INSERT OR REPLACE INTO schema_version (version) VALUES (?)', [SCHEMA_VERSION]);
+    database.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
   }
 }
 
-function tryLoadSqliteVec(database: Database): void {
+function tryLoadSqliteVec(database: Database.Database): void {
   try {
-    // sqlite-vec is a loadable extension — try common paths
-    const paths = [
-      'vec0', // if installed globally or in LD_LIBRARY_PATH
-      '/opt/homebrew/lib/vec0',
-      '/usr/local/lib/vec0',
-    ];
-    for (const p of paths) {
-      try {
-        database.loadExtension(p);
-        database.exec(`
-          CREATE VIRTUAL TABLE IF NOT EXISTS observations_vec USING vec0(
-            observation_id INTEGER PRIMARY KEY,
-            embedding float[1024]
-          )
-        `);
-        console.log('[db] sqlite-vec loaded successfully');
-        return;
-      } catch { /* try next path */ }
-    }
-    console.log('[db] sqlite-vec not available — semantic search disabled, FTS5 still works');
-  } catch {
+    database.loadExtension(getLoadablePath());
+    database.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS observations_vec USING vec0(
+        observation_id INTEGER PRIMARY KEY,
+        embedding float[1024]
+      )
+    `);
+    console.log('[db] sqlite-vec loaded successfully');
+  } catch (err) {
     console.log('[db] sqlite-vec not available — semantic search disabled, FTS5 still works');
   }
 }
 
-export function getDb(): Database {
+export function getDb(): Database.Database {
   if (db) return db;
 
   getDataDir(); // ensure dir exists

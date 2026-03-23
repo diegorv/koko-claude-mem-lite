@@ -20,33 +20,29 @@ export function createSession(contentSessionId: string, project: string, prompt?
   const now = Date.now();
   const iso = new Date(now).toISOString();
 
-  db.run(
+  db.prepare(
     `INSERT OR IGNORE INTO sessions (content_session_id, project, user_prompt, created_at, created_at_epoch)
-     VALUES (?, ?, ?, ?, ?)`,
-    [contentSessionId, project, prompt || null, iso, now]
-  );
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(contentSessionId, project, prompt || null, iso, now);
 
   // If session already exists, update prompt if provided
   if (prompt) {
-    db.run(
-      `UPDATE sessions SET user_prompt = ? WHERE content_session_id = ? AND user_prompt IS NULL`,
-      [prompt, contentSessionId]
-    );
+    db.prepare(
+      `UPDATE sessions SET user_prompt = ? WHERE content_session_id = ? AND user_prompt IS NULL`
+    ).run(prompt, contentSessionId);
   }
 
-  return db.query('SELECT * FROM sessions WHERE content_session_id = ?').get(contentSessionId) as Session;
+  return db.prepare('SELECT * FROM sessions WHERE content_session_id = ?').get(contentSessionId) as Session;
 }
 
 export function completeSession(contentSessionId: string): void {
-  const db = getDb();
-  db.run(
-    `UPDATE sessions SET status = 'completed' WHERE content_session_id = ?`,
-    [contentSessionId]
-  );
+  getDb().prepare(
+    `UPDATE sessions SET status = 'completed' WHERE content_session_id = ?`
+  ).run(contentSessionId);
 }
 
 export function getSessionByContentId(contentSessionId: string): Session | null {
-  return getDb().query('SELECT * FROM sessions WHERE content_session_id = ?').get(contentSessionId) as Session | null;
+  return getDb().prepare('SELECT * FROM sessions WHERE content_session_id = ?').get(contentSessionId) as Session | null;
 }
 
 // --- Observations ---
@@ -88,33 +84,32 @@ export function storeObservation(
   const contentHash = computeContentHash(contentSessionId, obs.title, obs.narrative);
 
   // Dedup check
-  const existing = db.query(
+  const existing = db.prepare(
     'SELECT id FROM observations WHERE content_hash = ? AND created_at_epoch > ?'
-  ).get(contentHash, now - DEDUP_WINDOW_MS) as { id: number } | null;
+  ).get(contentHash, now - DEDUP_WINDOW_MS) as { id: number } | undefined;
 
   if (existing) {
     return { id: existing.id, deduplicated: true };
   }
 
-  const result = db.run(
+  const result = db.prepare(
     `INSERT INTO observations (session_id, project, type, title, facts, narrative, files_read, files_modified, content_hash, created_at, created_at_epoch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      sessionId, project, obs.type,
-      obs.title,
-      JSON.stringify(obs.facts),
-      obs.narrative,
-      JSON.stringify(obs.files_read),
-      JSON.stringify(obs.files_modified),
-      contentHash, iso, now
-    ]
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    sessionId, project, obs.type,
+    obs.title,
+    JSON.stringify(obs.facts),
+    obs.narrative,
+    JSON.stringify(obs.files_read),
+    JSON.stringify(obs.files_modified),
+    contentHash, iso, now
   );
 
   return { id: Number(result.lastInsertRowid), deduplicated: false };
 }
 
 export function getRecentObservations(project: string, limit: number): Observation[] {
-  return getDb().query(
+  return getDb().prepare(
     'SELECT * FROM observations WHERE project = ? ORDER BY created_at_epoch DESC LIMIT ?'
   ).all(project, limit) as Observation[];
 }
@@ -143,26 +138,21 @@ export interface SummaryInput {
 }
 
 export function storeSummary(sessionId: number, project: string, summary: SummaryInput): number {
-  const db = getDb();
-  const now = Date.now();
-  const iso = new Date(now).toISOString();
-
-  const result = db.run(
+  const result = getDb().prepare(
     `INSERT OR REPLACE INTO summaries (session_id, project, request, investigated, learned, completed, next_steps, created_at, created_at_epoch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      sessionId, project,
-      summary.request, summary.investigated, summary.learned,
-      summary.completed, summary.next_steps,
-      iso, now
-    ]
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    sessionId, project,
+    summary.request, summary.investigated, summary.learned,
+    summary.completed, summary.next_steps,
+    new Date().toISOString(), Date.now()
   );
 
   return Number(result.lastInsertRowid);
 }
 
 export function getRecentSummaries(project: string, limit: number): Summary[] {
-  return getDb().query(
+  return getDb().prepare(
     'SELECT * FROM summaries WHERE project = ? ORDER BY created_at_epoch DESC LIMIT ?'
   ).all(project, limit) as Summary[];
 }
@@ -183,7 +173,7 @@ export function searchObservationsFts(query: string, project?: string, limit: nu
   const db = getDb();
 
   if (project) {
-    return db.query(
+    return db.prepare(
       `SELECT o.id, o.title, o.narrative, o.facts, o.project, o.created_at, f.rank
        FROM observations_fts f
        JOIN observations o ON o.id = f.rowid
@@ -193,7 +183,7 @@ export function searchObservationsFts(query: string, project?: string, limit: nu
     ).all(query, project, limit) as SearchResult[];
   }
 
-  return db.query(
+  return db.prepare(
     `SELECT o.id, o.title, o.narrative, o.facts, o.project, o.created_at, f.rank
      FROM observations_fts f
      JOIN observations o ON o.id = f.rowid
@@ -252,7 +242,7 @@ export function searchObservationsIndex(filters: SearchIndexFilters): SearchInde
 
   params.push(limit, offset);
 
-  return db.query(
+  return db.prepare(
     `SELECT o.id, o.type, o.title, o.narrative, o.facts, o.created_at, f.rank
      FROM observations_fts f
      JOIN observations o ON o.id = f.rowid
@@ -266,7 +256,7 @@ export function getObservationsByIds(ids: number[]): Observation[] {
   if (ids.length === 0) return [];
   const db = getDb();
   const placeholders = ids.map(() => '?').join(',');
-  return db.query(
+  return db.prepare(
     `SELECT * FROM observations WHERE id IN (${placeholders}) ORDER BY created_at_epoch ASC`
   ).all(...ids) as Observation[];
 }
@@ -279,19 +269,19 @@ export function getTimelineAroundObservation(
 ): { anchor: Observation | null; before: Observation[]; after: Observation[] } {
   const db = getDb();
 
-  const anchor = db.query('SELECT * FROM observations WHERE id = ?').get(anchorId) as Observation | null;
+  const anchor = db.prepare('SELECT * FROM observations WHERE id = ?').get(anchorId) as Observation | undefined;
   if (!anchor) return { anchor: null, before: [], after: [] };
 
   const projectFilter = project ? 'AND project = ?' : '';
   const projectParams = project ? [project] : [];
 
-  const before = db.query(
+  const before = db.prepare(
     `SELECT * FROM observations
      WHERE created_at_epoch < ? ${projectFilter}
      ORDER BY created_at_epoch DESC LIMIT ?`
   ).all(anchor.created_at_epoch, ...projectParams, depthBefore) as Observation[];
 
-  const after = db.query(
+  const after = db.prepare(
     `SELECT * FROM observations
      WHERE created_at_epoch > ? ${projectFilter}
      ORDER BY created_at_epoch ASC LIMIT ?`

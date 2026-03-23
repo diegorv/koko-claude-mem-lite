@@ -162,7 +162,7 @@ router.get('/api/dashboard/sessions', (req, res) => {
     const whereClause = project ? 'WHERE s.project = ?' : '';
     const params = project ? [project, limit, offset] : [limit, offset];
 
-    const sessions = db.query(`
+    const sessions = db.prepare(`
       SELECT s.*,
         (SELECT COUNT(*) FROM observations o WHERE o.session_id = s.id) as observation_count,
         json_object(
@@ -179,7 +179,7 @@ router.get('/api/dashboard/sessions', (req, res) => {
       LIMIT ? OFFSET ?
     `).all(...params);
 
-    const total = db.query(`SELECT COUNT(*) as count FROM sessions ${project ? 'WHERE project = ?' : ''}`).get(...(project ? [project] : [])) as { count: number };
+    const total = db.prepare(`SELECT COUNT(*) as count FROM sessions ${project ? 'WHERE project = ?' : ''}`).get(...(project ? [project] : [])) as { count: number };
 
     res.json({ sessions, total: total.count });
   } catch (error) {
@@ -193,7 +193,7 @@ router.get('/api/dashboard/sessions/:sessionId/observations', (req, res) => {
   try {
     const sessionId = parseInt(req.params.sessionId);
     const db = getDb();
-    const observations = db.query(
+    const observations = db.prepare(
       'SELECT * FROM observations WHERE session_id = ? ORDER BY created_at_epoch ASC'
     ).all(sessionId);
     res.json({ observations });
@@ -207,7 +207,7 @@ router.get('/api/dashboard/sessions/:sessionId/observations', (req, res) => {
 router.get('/api/dashboard/projects', (_req, res) => {
   try {
     const db = getDb();
-    const projects = db.query(`
+    const projects = db.prepare(`
       SELECT project, COUNT(*) as session_count,
         MAX(created_at) as last_active
       FROM sessions
@@ -225,19 +225,19 @@ router.get('/api/dashboard/projects', (_req, res) => {
 router.get('/api/dashboard/stats', (_req, res) => {
   try {
     const db = getDb();
-    const sessions = db.query('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
-    const activeSessions = db.query("SELECT COUNT(*) as count FROM sessions WHERE status = 'active'").get() as { count: number };
-    const observations = db.query('SELECT COUNT(*) as count FROM observations').get() as { count: number };
-    const summaries = db.query('SELECT COUNT(*) as count FROM summaries').get() as { count: number };
-    const projects = db.query('SELECT COUNT(DISTINCT project) as count FROM sessions').get() as { count: number };
+    const sessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
+    const activeSessions = db.prepare("SELECT COUNT(*) as count FROM sessions WHERE status = 'active'").get() as { count: number };
+    const observations = db.prepare('SELECT COUNT(*) as count FROM observations').get() as { count: number };
+    const summaries = db.prepare('SELECT COUNT(*) as count FROM summaries').get() as { count: number };
+    const projects = db.prepare('SELECT COUNT(DISTINCT project) as count FROM sessions').get() as { count: number };
 
     // Type breakdown
-    const types = db.query(
+    const types = db.prepare(
       "SELECT type, COUNT(*) as count FROM observations GROUP BY type ORDER BY count DESC"
     ).all() as { type: string; count: number }[];
 
     // Recent activity (observations per day, last 7 days)
-    const daily = db.query(`
+    const daily = db.prepare(`
       SELECT date(created_at) as day, COUNT(*) as count
       FROM observations
       WHERE created_at_epoch > ?
@@ -277,7 +277,7 @@ router.get('/api/dashboard/feed', (req, res) => {
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const observations = db.query(`
+    const observations = db.prepare(`
       SELECT id, session_id, project, type, title, facts, narrative,
         files_read, files_modified, created_at, created_at_epoch,
         'observation' as item_type
@@ -285,7 +285,7 @@ router.get('/api/dashboard/feed', (req, res) => {
       ORDER BY created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
 
-    const summaries = db.query(`
+    const summaries = db.prepare(`
       SELECT id, session_id, project, request, investigated, learned,
         completed, next_steps, created_at, created_at_epoch,
         'summary' as item_type
@@ -388,7 +388,7 @@ router.get('/api/search', async (req, res) => {
       // Fetch full observation data for matched IDs
       const db = getDb();
       const enriched = vecResults.map(r => {
-        const obs = db.query('SELECT * FROM observations WHERE id = ?').get(r.observationId) as any;
+        const obs = db.prepare('SELECT * FROM observations WHERE id = ?').get(r.observationId) as any;
         return obs ? { ...obs, distance: r.distance } : null;
       }).filter(Boolean);
       return res.json({ results: enriched, mode: 'semantic' });
