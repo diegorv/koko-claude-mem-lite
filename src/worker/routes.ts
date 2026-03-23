@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Hono } from 'hono';
 import {
   createSession, completeSession, getSessionByContentId,
   storeObservation, storeSummary,
@@ -11,72 +11,63 @@ import { formatSearchIndex, formatTimeline, formatObservationsFull } from './for
 import { generateContext } from '../context/generator.js';
 import { extractObservation, generateSummary } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
-import { getProjectName } from '../utils/paths.js';
 import { getSetting } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
 import { getDb } from '../db/database.js';
 
-export const router = Router();
+export const app = new Hono();
 
 // Health check
-router.get('/api/health', (_req, res) => {
-  res.json({ ok: true });
-});
+app.get('/api/health', (c) => c.json({ ok: true }));
 
 // Context injection for SessionStart
-router.get('/api/context', (req, res) => {
+app.get('/api/context', (c) => {
   try {
-    const project = (req.query.project as string) || 'unknown';
+    const project = c.req.query('project') || 'unknown';
     const context = generateContext(project);
-    res.json({ context });
+    return c.json({ context });
   } catch (error) {
     console.error('[routes] /api/context error:', error);
-    res.status(500).json({ error: 'Failed to generate context' });
+    return c.json({ error: 'Failed to generate context' }, 500);
   }
 });
 
 // Create/find session
-router.post('/api/sessions', (req, res) => {
+app.post('/api/sessions', async (c) => {
   try {
-    const { contentSessionId, project, prompt } = req.body;
-    if (!contentSessionId) {
-      return res.status(400).json({ error: 'contentSessionId required' });
-    }
+    const { contentSessionId, project, prompt } = await c.req.json();
+    if (!contentSessionId) return c.json({ error: 'contentSessionId required' }, 400);
 
     const cleanPrompt = prompt ? stripPrivateTags(prompt) : undefined;
     if (prompt && isEntirelyPrivate(prompt)) {
-      return res.json({ sessionId: null, skipped: true });
+      return c.json({ sessionId: null, skipped: true });
     }
 
     const session = createSession(contentSessionId, project || 'unknown', cleanPrompt);
-    res.json({ sessionId: session.id });
+    return c.json({ sessionId: session.id });
   } catch (error) {
     console.error('[routes] /api/sessions error:', error);
-    res.status(500).json({ error: 'Failed to create session' });
+    return c.json({ error: 'Failed to create session' }, 500);
   }
 });
 
 // Store observation (extracts structured data via AI)
-router.post('/api/observations', async (req, res) => {
+app.post('/api/observations', async (c) => {
   try {
-    const { contentSessionId, tool_name, tool_input, tool_response, cwd } = req.body;
+    const { contentSessionId, tool_name, tool_input, tool_response, cwd } = await c.req.json();
     if (!contentSessionId || !tool_name) {
-      return res.status(400).json({ error: 'contentSessionId and tool_name required' });
+      return c.json({ error: 'contentSessionId and tool_name required' }, 400);
     }
 
     const session = getSessionByContentId(contentSessionId);
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
+    if (!session) return c.json({ error: 'Session not found' }, 404);
 
     const cleanInput = stripPrivateTags(tool_input || '');
     const cleanResponse = stripPrivateTags(tool_response || '');
 
-    // Extract structured observation via AI
     const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
 
     if (!parsed) {
-      // AI extraction failed — store raw fallback
       const fallback: ObservationInput = {
         type: 'raw',
         title: `${tool_name} usage`,
@@ -86,77 +77,67 @@ router.post('/api/observations', async (req, res) => {
         files_modified: [],
       };
       const result = storeObservation(session.id, session.project, fallback, contentSessionId);
-      return res.json({ ok: true, observationId: result.id, raw: true });
+      return c.json({ ok: true, observationId: result.id, raw: true });
     }
 
     const result = storeObservation(session.id, session.project, parsed, contentSessionId);
 
-    // Generate embedding asynchronously (non-blocking, fire-and-forget)
     if (!result.deduplicated) {
       embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
         .catch(err => console.error('[routes] embedding failed:', err));
     }
 
-    res.json({ ok: true, observationId: result.id, deduplicated: result.deduplicated });
+    return c.json({ ok: true, observationId: result.id, deduplicated: result.deduplicated });
   } catch (error) {
     console.error('[routes] /api/observations error:', error);
-    res.status(500).json({ error: 'Failed to store observation' });
+    return c.json({ error: 'Failed to store observation' }, 500);
   }
 });
 
 // Generate session summary
-router.post('/api/summarize', async (req, res) => {
+app.post('/api/summarize', async (c) => {
   try {
-    const { contentSessionId, last_assistant_message } = req.body;
-    if (!contentSessionId) {
-      return res.status(400).json({ error: 'contentSessionId required' });
-    }
+    const { contentSessionId, last_assistant_message } = await c.req.json();
+    if (!contentSessionId) return c.json({ error: 'contentSessionId required' }, 400);
 
     const session = getSessionByContentId(contentSessionId);
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
+    if (!session) return c.json({ error: 'Session not found' }, 404);
 
     if (!last_assistant_message) {
-      return res.json({ ok: true, skipped: true, reason: 'no assistant message' });
+      return c.json({ ok: true, skipped: true, reason: 'no assistant message' });
     }
 
     const summary = await generateSummary(last_assistant_message);
-    if (!summary) {
-      return res.json({ ok: true, skipped: true, reason: 'AI summary failed' });
-    }
+    if (!summary) return c.json({ ok: true, skipped: true, reason: 'AI summary failed' });
 
     storeSummary(session.id, session.project, summary);
-    res.json({ ok: true });
+    return c.json({ ok: true });
   } catch (error) {
     console.error('[routes] /api/summarize error:', error);
-    res.status(500).json({ error: 'Failed to generate summary' });
+    return c.json({ error: 'Failed to generate summary' }, 500);
   }
 });
 
 // Complete session
-router.post('/api/sessions/complete', (req, res) => {
+app.post('/api/sessions/complete', async (c) => {
   try {
-    const { contentSessionId } = req.body;
-    if (!contentSessionId) {
-      return res.status(400).json({ error: 'contentSessionId required' });
-    }
+    const { contentSessionId } = await c.req.json();
+    if (!contentSessionId) return c.json({ error: 'contentSessionId required' }, 400);
     completeSession(contentSessionId);
-    res.json({ ok: true });
+    return c.json({ ok: true });
   } catch (error) {
     console.error('[routes] /api/sessions/complete error:', error);
-    res.status(500).json({ error: 'Failed to complete session' });
+    return c.json({ error: 'Failed to complete session' }, 500);
   }
 });
 
 // --- Dashboard API routes ---
 
-// List all sessions (with summary + observation count)
-router.get('/api/dashboard/sessions', (req, res) => {
+app.get('/api/dashboard/sessions', (c) => {
   try {
-    const project = req.query.project as string | undefined;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const offset = parseInt(req.query.offset as string) || 0;
+    const project = c.req.query('project');
+    const limit = parseInt(c.req.query('limit') || '50');
+    const offset = parseInt(c.req.query('offset') || '0');
     const db = getDb();
 
     const whereClause = project ? 'WHERE s.project = ?' : '';
@@ -181,30 +162,28 @@ router.get('/api/dashboard/sessions', (req, res) => {
 
     const total = db.prepare(`SELECT COUNT(*) as count FROM sessions ${project ? 'WHERE project = ?' : ''}`).get(...(project ? [project] : [])) as { count: number };
 
-    res.json({ sessions, total: total.count });
+    return c.json({ sessions, total: total.count });
   } catch (error) {
     console.error('[routes] /api/dashboard/sessions error:', error);
-    res.status(500).json({ error: 'Failed to list sessions' });
+    return c.json({ error: 'Failed to list sessions' }, 500);
   }
 });
 
-// Get observations for a session
-router.get('/api/dashboard/sessions/:sessionId/observations', (req, res) => {
+app.get('/api/dashboard/sessions/:sessionId/observations', (c) => {
   try {
-    const sessionId = parseInt(req.params.sessionId);
+    const sessionId = parseInt(c.req.param('sessionId'));
     const db = getDb();
     const observations = db.prepare(
       'SELECT * FROM observations WHERE session_id = ? ORDER BY created_at_epoch ASC'
     ).all(sessionId);
-    res.json({ observations });
+    return c.json({ observations });
   } catch (error) {
     console.error('[routes] /api/dashboard/observations error:', error);
-    res.status(500).json({ error: 'Failed to list observations' });
+    return c.json({ error: 'Failed to list observations' }, 500);
   }
 });
 
-// List all projects
-router.get('/api/dashboard/projects', (_req, res) => {
+app.get('/api/dashboard/projects', (c) => {
   try {
     const db = getDb();
     const projects = db.prepare(`
@@ -214,15 +193,14 @@ router.get('/api/dashboard/projects', (_req, res) => {
       GROUP BY project
       ORDER BY last_active DESC
     `).all();
-    res.json({ projects });
+    return c.json({ projects });
   } catch (error) {
     console.error('[routes] /api/dashboard/projects error:', error);
-    res.status(500).json({ error: 'Failed to list projects' });
+    return c.json({ error: 'Failed to list projects' }, 500);
   }
 });
 
-// Stats
-router.get('/api/dashboard/stats', (_req, res) => {
+app.get('/api/dashboard/stats', (c) => {
   try {
     const db = getDb();
     const sessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as { count: number };
@@ -231,12 +209,10 @@ router.get('/api/dashboard/stats', (_req, res) => {
     const summaries = db.prepare('SELECT COUNT(*) as count FROM summaries').get() as { count: number };
     const projects = db.prepare('SELECT COUNT(DISTINCT project) as count FROM sessions').get() as { count: number };
 
-    // Type breakdown
     const types = db.prepare(
       "SELECT type, COUNT(*) as count FROM observations GROUP BY type ORDER BY count DESC"
     ).all() as { type: string; count: number }[];
 
-    // Recent activity (observations per day, last 7 days)
     const daily = db.prepare(`
       SELECT date(created_at) as day, COUNT(*) as count
       FROM observations
@@ -245,7 +221,7 @@ router.get('/api/dashboard/stats', (_req, res) => {
       ORDER BY day ASC
     `).all(Date.now() - 7 * 86400000) as { day: string; count: number }[];
 
-    res.json({
+    return c.json({
       sessions: sessions.count,
       activeSessions: activeSessions.count,
       observations: observations.count,
@@ -257,16 +233,15 @@ router.get('/api/dashboard/stats', (_req, res) => {
     });
   } catch (error) {
     console.error('[routes] /api/dashboard/stats error:', error);
-    res.status(500).json({ error: 'Failed to get stats' });
+    return c.json({ error: 'Failed to get stats' }, 500);
   }
 });
 
-// Recent feed (mixed observations + summaries, chronological)
-router.get('/api/dashboard/feed', (req, res) => {
+app.get('/api/dashboard/feed', (c) => {
   try {
-    const project = req.query.project as string | undefined;
-    const limit = parseInt(req.query.limit as string) || 30;
-    const before = req.query.before as string | undefined;
+    const project = c.req.query('project');
+    const limit = parseInt(c.req.query('limit') || '30');
+    const before = c.req.query('before');
     const db = getDb();
 
     const conditions: string[] = [];
@@ -277,7 +252,7 @@ router.get('/api/dashboard/feed', (req, res) => {
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
-    const observations = db.prepare(`
+    const obs = db.prepare(`
       SELECT id, session_id, project, type, title, facts, narrative,
         files_read, files_modified, created_at, created_at_epoch,
         'observation' as item_type
@@ -285,7 +260,7 @@ router.get('/api/dashboard/feed', (req, res) => {
       ORDER BY created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
 
-    const summaries = db.prepare(`
+    const sums = db.prepare(`
       SELECT id, session_id, project, request, investigated, learned,
         completed, next_steps, created_at, created_at_epoch,
         'summary' as item_type
@@ -293,111 +268,104 @@ router.get('/api/dashboard/feed', (req, res) => {
       ORDER BY created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
 
-    const feed = [...observations, ...summaries]
+    const feed = [...obs, ...sums]
       .sort((a: any, b: any) => b.created_at_epoch - a.created_at_epoch)
       .slice(0, limit);
 
-    res.json({ feed });
+    return c.json({ feed });
   } catch (error) {
     console.error('[routes] /api/dashboard/feed error:', error);
-    res.status(500).json({ error: 'Failed to get feed' });
+    return c.json({ error: 'Failed to get feed' }, 500);
   }
 });
 
 // --- Progressive Disclosure API ---
 
-// Layer 1: Compact search index (~50-100 tokens per result)
-router.get('/api/search/index', (req, res) => {
+app.get('/api/search/index', (c) => {
   try {
-    const q = req.query.q as string;
-    if (!q) return res.status(400).json({ error: 'q parameter required' });
+    const q = c.req.query('q');
+    if (!q) return c.json({ error: 'q parameter required' }, 400);
 
     const results = searchObservationsIndex({
       query: q,
-      project: req.query.project as string | undefined,
-      type: req.query.type as string | undefined,
-      dateStart: req.query.dateStart as string | undefined,
-      dateEnd: req.query.dateEnd as string | undefined,
-      limit: parseInt(req.query.limit as string) || 20,
-      offset: parseInt(req.query.offset as string) || 0,
+      project: c.req.query('project'),
+      type: c.req.query('type'),
+      dateStart: c.req.query('dateStart'),
+      dateEnd: c.req.query('dateEnd'),
+      limit: parseInt(c.req.query('limit') || '20'),
+      offset: parseInt(c.req.query('offset') || '0'),
     });
 
     const formatted = formatSearchIndex(results);
-    res.json({ content: [{ type: 'text', text: formatted }] });
+    return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {
     console.error('[routes] /api/search/index error:', error);
-    res.status(500).json({ error: 'Search failed' });
+    return c.json({ error: 'Search failed' }, 500);
   }
 });
 
-// Layer 2: Timeline context around an observation
-router.get('/api/timeline', (req, res) => {
+app.get('/api/timeline', (c) => {
   try {
-    const anchorId = parseInt(req.query.anchor as string);
-    if (isNaN(anchorId)) return res.status(400).json({ error: 'anchor parameter required (observation ID)' });
+    const anchorId = parseInt(c.req.query('anchor') || '');
+    if (isNaN(anchorId)) return c.json({ error: 'anchor parameter required (observation ID)' }, 400);
 
-    const depthBefore = parseInt(req.query.depth_before as string) || 5;
-    const depthAfter = parseInt(req.query.depth_after as string) || 5;
-    const project = req.query.project as string | undefined;
+    const depthBefore = parseInt(c.req.query('depth_before') || '5');
+    const depthAfter = parseInt(c.req.query('depth_after') || '5');
+    const project = c.req.query('project');
 
     const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
-    if (!anchor) return res.status(404).json({ error: 'Observation not found' });
+    if (!anchor) return c.json({ error: 'Observation not found' }, 404);
 
     const formatted = formatTimeline(before, anchor, after);
-    res.json({ content: [{ type: 'text', text: formatted }] });
+    return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {
     console.error('[routes] /api/timeline error:', error);
-    res.status(500).json({ error: 'Timeline failed' });
+    return c.json({ error: 'Timeline failed' }, 500);
   }
 });
 
-// Layer 3: Full observation details by IDs
-router.post('/api/observations/batch', (req, res) => {
+app.post('/api/observations/batch', async (c) => {
   try {
-    const { ids } = req.body;
+    const { ids } = await c.req.json();
     if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ error: 'ids array required' });
+      return c.json({ error: 'ids array required' }, 400);
     }
 
     const observations = getObservationsByIds(ids.map(Number));
     const formatted = formatObservationsFull(observations);
-    res.json({ content: [{ type: 'text', text: formatted }] });
+    return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {
     console.error('[routes] /api/observations/batch error:', error);
-    res.status(500).json({ error: 'Batch fetch failed' });
+    return c.json({ error: 'Batch fetch failed' }, 500);
   }
 });
 
-// Search (FTS5 or semantic)
-router.get('/api/search', async (req, res) => {
+app.get('/api/search', async (c) => {
   try {
-    const q = req.query.q as string;
-    const project = req.query.project as string | undefined;
-    const mode = (req.query.mode as string) || 'fts';
-    const limit = parseInt(req.query.limit as string) || 10;
+    const q = c.req.query('q');
+    const project = c.req.query('project');
+    const mode = c.req.query('mode') || 'fts';
+    const limit = parseInt(c.req.query('limit') || '10');
 
-    if (!q) {
-      return res.status(400).json({ error: 'q parameter required' });
-    }
+    if (!q) return c.json({ error: 'q parameter required' }, 400);
 
     if (mode === 'semantic') {
       const vecResults = await searchSemantic(getDb(), q, limit);
       if (vecResults.length === 0) {
-        return res.json({ results: [], mode: 'semantic', message: 'No results (Ollama may be unavailable)' });
+        return c.json({ results: [], mode: 'semantic', message: 'No results (Ollama may be unavailable)' });
       }
-      // Fetch full observation data for matched IDs
       const db = getDb();
       const enriched = vecResults.map(r => {
         const obs = db.prepare('SELECT * FROM observations WHERE id = ?').get(r.observationId) as any;
         return obs ? { ...obs, distance: r.distance } : null;
       }).filter(Boolean);
-      return res.json({ results: enriched, mode: 'semantic' });
+      return c.json({ results: enriched, mode: 'semantic' });
     }
 
     const results = searchObservationsFts(q, project, limit);
-    res.json({ results, mode: 'fts' });
+    return c.json({ results, mode: 'fts' });
   } catch (error) {
     console.error('[routes] /api/search error:', error);
-    res.status(500).json({ error: 'Search failed' });
+    return c.json({ error: 'Search failed' }, 500);
   }
 });
