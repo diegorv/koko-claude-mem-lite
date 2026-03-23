@@ -4,6 +4,7 @@
   "description": "Privacy-first memory plugin for Claude Code",
   "type": "module",
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
     "better-sqlite3": "^12.8.0",
     "sqlite-vec": "^0.1.7"
   }
