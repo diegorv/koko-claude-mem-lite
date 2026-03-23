@@ -11,6 +11,7 @@ import { getSetting } from '../utils/settings.js';
 import { readFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
 
@@ -39,8 +40,8 @@ async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<
   // Ensure worker is running, spawn if needed
   if (!await ensureWorker()) {
     // Try to spawn worker in background
-    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || dirname(__dirname);
-    const workerScript = join(pluginRoot, 'scripts', 'worker.cjs');
+    const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..');
+    const workerScript = join(pluginRoot, 'scripts', 'worker.mjs');
 
     try {
       const child = spawn('node', [workerScript], {

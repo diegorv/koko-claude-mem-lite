@@ -8,20 +8,20 @@
     "build:worker": "npx tsx build.ts",
     "build:ui": "vite build",
     "dev:ui": "vite",
-    "worker:start": "node plugin/scripts/worker.cjs",
+    "worker:start": "node plugin/scripts/worker.mjs",
     "worker:stop": "kill $(cat ~/.memory-lite/worker.pid) 2>/dev/null || true"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.81",
+    "@hono/node-server": "^1.19.11",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "better-sqlite3": "^12.8.0",
-    "express": "^4.18.2",
+    "hono": "^4.12.9",
     "sqlite-vec": "^0.1.7"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/express": "^4.17.21",
     "@types/node": "^20.0.0",
     "esbuild": "^0.27.2",
     "svelte": "^5.55.0",
