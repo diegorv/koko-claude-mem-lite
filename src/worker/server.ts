@@ -1,25 +1,26 @@
-import express from 'express';
+import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
-import { router } from './routes.js';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { app } from './routes.js';
 import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
 import { closeDb } from '../db/database.js';
 
-const app = express();
-app.use(express.json({ limit: '5mb' }));
-app.use(router);
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Serve dashboard UI
 const uiPath = join(__dirname, '..', 'ui');
 if (existsSync(uiPath)) {
-  app.use(express.static(uiPath));
-  app.get('/', (_req, res) => {
-    res.sendFile(join(uiPath, 'index.html'));
+  app.get('/', (c) => {
+    const html = readFileSync(join(uiPath, 'index.html'), 'utf-8');
+    return c.html(html);
   });
+  app.use('/*', serveStatic({ root: uiPath }));
 }
 
-const port = getSetting('WORKER_PORT');
+const port = parseInt(getSetting('WORKER_PORT'));
 const pidPath = getPidPath();
 
 function writePid(): void {
@@ -46,17 +47,16 @@ process.on('SIGINT', shutdown);
 if (existsSync(pidPath)) {
   const oldPid = parseInt(readFileSync(pidPath, 'utf-8').trim());
   try {
-    process.kill(oldPid, 0); // test if process exists
+    process.kill(oldPid, 0);
     console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
     process.exit(0);
   } catch {
-    // Process doesn't exist, stale PID file
     removePid();
   }
 }
 
 writePid();
 
-app.listen(port, '127.0.0.1', () => {
+serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
   console.log(`[worker] Memory-lite worker running on http://127.0.0.1:${port}`);
 });
