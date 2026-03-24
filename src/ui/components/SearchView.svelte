@@ -13,9 +13,12 @@
     if (!localQuery.trim()) return;
     loading = true;
     searched = true;
-    const res = await search(localQuery, project || undefined);
-    results = res.results;
-    loading = false;
+    try {
+      const res = await search(localQuery, project || undefined);
+      results = res.results;
+    } finally {
+      loading = false;
+    }
   }
 
   function onKeydown(e: KeyboardEvent) {
