@@ -21,7 +21,7 @@ if (existsSync(uiPath)) {
   app.use('/*', serveStatic({ root: uiPath }));
 }
 
-const port = parseInt(getSetting('WORKER_PORT'));
+const port = getSetting('WORKER_PORT');
 const pidPath = getPidPath();
 
 interface PidInfo { pid: number; port: number; startedAt: number }

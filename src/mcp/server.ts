@@ -6,7 +6,6 @@
  */
 
 // Redirect console.log to stderr to protect MCP stdio protocol
-const _origLog = console.log;
 console.log = (...args: any[]) => console.error(...args);
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';

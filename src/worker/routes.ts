@@ -6,14 +6,13 @@ import {
   searchObservationsFts, searchObservationsIndex,
   getObservationsByIds, getTimelineAroundObservation,
   deleteObservation, deleteSummary, deleteSession,
-  type ObservationInput,
 } from '../db/queries.js';
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext, generateContextDetailed } from '../context/generator.js';
 import { extractObservation, generateSummary, reviewForCleanup, type CleanupItem } from './summarizer.js';
 import { getOrCreateObserver, getObserver, destroyObserver } from './observer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
-import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
+import { getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
 import { getDb, isDbReady } from '../db/database.js';
 
