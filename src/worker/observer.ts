@@ -128,6 +128,7 @@ function truncate(str: string, maxLen: number): string {
 // --- DurableQueue: SQLite-backed async iterator ---
 
 const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+const MAX_RESTARTS = 3;
 
 class DurableQueue {
   private emitter = new EventEmitter();
@@ -216,14 +217,16 @@ export class ObserverSession {
   private destroyed = false;
   private memorySessionId: string | null;
   private abortController = new AbortController();
+  private restartCount: number;
 
   readonly contentSessionId: string;
   readonly project: string;
 
-  constructor(contentSessionId: string, project: string, userPrompt?: string, memorySessionId?: string | null) {
+  constructor(contentSessionId: string, project: string, userPrompt?: string, memorySessionId?: string | null, restartCount: number = 0) {
     this.contentSessionId = contentSessionId;
     this.project = project;
     this.memorySessionId = memorySessionId || null;
+    this.restartCount = restartCount;
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
 
     this.runConversation(project, userPrompt);
@@ -344,7 +347,33 @@ export class ObserverSession {
         this.resolveAndCleanup(currentPendingMsg, '');
       }
       console.log(`[observer] Conversation ended for ${this.contentSessionId}`);
-      this.destroy();
+
+      // Auto-restart if pending messages remain
+      const remainingCount = getPendingCount(this.contentSessionId);
+      if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
+        console.log(`[observer] ${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
+        forceUnstickAll(this.contentSessionId);
+
+        // Replace self in activeSessions with a new session
+        this.destroyed = true;
+        this.abortController.abort();
+        this.queue.close();
+        for (const [, pending] of this.pendingResults) {
+          pending.resolve(null);
+        }
+        this.pendingResults.clear();
+
+        const replacement = new ObserverSession(
+          this.contentSessionId, this.project, undefined,
+          this.memorySessionId, this.restartCount + 1,
+        );
+        activeSessions.set(this.contentSessionId, replacement);
+      } else {
+        if (remainingCount > 0) {
+          console.warn(`[observer] ${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
+        }
+        this.destroy();
+      }
     }
   }
 
