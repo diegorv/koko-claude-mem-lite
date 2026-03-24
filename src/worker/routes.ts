@@ -9,7 +9,7 @@ import {
   type ObservationInput,
 } from '../db/queries.js';
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
-import { generateContext } from '../context/generator.js';
+import { generateContext, generateContextDetailed } from '../context/generator.js';
 import { extractObservation, generateSummary } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
@@ -423,9 +423,8 @@ app.delete('/api/sessions/:id', (c) => {
 app.get('/api/dashboard/context-preview', (c) => {
   try {
     const project = c.req.query('project') || 'unknown';
-    const context = generateContext(project);
-    const estimatedTokens = Math.ceil(context.length / 4);
-    return c.json({ context, estimatedTokens });
+    const breakdown = generateContextDetailed(project);
+    return c.json(breakdown);
   } catch (error) {
     console.error('[routes] /api/dashboard/context-preview error:', error);
     return c.json({ error: 'Failed to generate context preview' }, 500);

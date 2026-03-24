@@ -3354,6 +3354,22 @@ function updateSettings(partial) {
 }
 
 // src/context/generator.ts
+function generateContextDetailed(project) {
+  const observationCount = getSetting("OBSERVATION_COUNT");
+  const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
+  const summaryCount = getSetting("SUMMARY_COUNT");
+  const summaries = getRecentSummaries(project, summaryCount);
+  const observations = getRecentObservations(project, observationCount);
+  const detailedIds = observations.slice(0, fullDetailCount).map((o) => o.id);
+  const context = generateContext(project);
+  return {
+    context,
+    estimatedTokens: Math.ceil(context.length / 4),
+    summaries,
+    observations,
+    detailedIds
+  };
+}
 function generateContext(project) {
   const observationCount = getSetting("OBSERVATION_COUNT");
   const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
@@ -3988,9 +4004,8 @@ app.delete("/api/sessions/:id", (c) => {
 app.get("/api/dashboard/context-preview", (c) => {
   try {
     const project = c.req.query("project") || "unknown";
-    const context = generateContext(project);
-    const estimatedTokens = Math.ceil(context.length / 4);
-    return c.json({ context, estimatedTokens });
+    const breakdown = generateContextDetailed(project);
+    return c.json(breakdown);
   } catch (error) {
     console.error("[routes] /api/dashboard/context-preview error:", error);
     return c.json({ error: "Failed to generate context preview" }, 500);

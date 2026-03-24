@@ -737,6 +737,17 @@ a:hover { text-decoration: underline; }
   cursor: default;
 }
 
+.context-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-count {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .context-preview {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -753,6 +764,107 @@ a:hover { text-decoration: underline; }
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Context structured view */
+.context-section {
+  margin-bottom: 16px;
+}
+
+.context-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.context-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.context-section-count {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.context-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 4px;
+  transition: border-color 0.15s;
+}
+
+.context-item:hover {
+  border-color: var(--accent-dim);
+}
+
+.context-item:hover .context-delete {
+  opacity: 0.6;
+}
+
+.context-item.detailed {
+  border-left: 3px solid var(--accent-dim);
+}
+
+.context-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.context-item-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-badge {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.context-item-body {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-light);
+}
+
+.context-field {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 2px;
+}
+
+.context-field-label {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.context-files {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.context-delete {
+  opacity: 0;
 }
 
 /* Settings */

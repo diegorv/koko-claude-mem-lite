@@ -1,5 +1,32 @@
-import { getRecentObservations, getRecentSummaries } from '../db/queries.js';
+import { getRecentObservations, getRecentSummaries, type Observation, type Summary } from '../db/queries.js';
 import { getSetting } from '../utils/settings.js';
+
+export interface ContextBreakdown {
+  context: string;
+  estimatedTokens: number;
+  summaries: Summary[];
+  observations: Observation[];
+  detailedIds: number[];  // observation IDs that get full detail section
+}
+
+export function generateContextDetailed(project: string): ContextBreakdown {
+  const observationCount = getSetting('OBSERVATION_COUNT');
+  const fullDetailCount = getSetting('FULL_OBSERVATION_COUNT');
+  const summaryCount = getSetting('SUMMARY_COUNT');
+
+  const summaries = getRecentSummaries(project, summaryCount);
+  const observations = getRecentObservations(project, observationCount);
+  const detailedIds = observations.slice(0, fullDetailCount).map(o => o.id);
+  const context = generateContext(project);
+
+  return {
+    context,
+    estimatedTokens: Math.ceil(context.length / 4),
+    summaries,
+    observations,
+    detailedIds,
+  };
+}
 
 export function generateContext(project: string): string {
   const observationCount = getSetting('OBSERVATION_COUNT');

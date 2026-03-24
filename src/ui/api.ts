@@ -123,7 +123,26 @@ export function deleteSession(id: number): Promise<{ ok: boolean }> {
 }
 
 // Context preview
-export function getContextPreview(project?: string): Promise<{ context: string; estimatedTokens: number }> {
+export interface ContextBreakdown {
+  context: string;
+  estimatedTokens: number;
+  summaries: {
+    id: number;
+    session_id: number;
+    project: string;
+    request: string | null;
+    investigated: string | null;
+    learned: string | null;
+    completed: string | null;
+    next_steps: string | null;
+    created_at: string;
+    created_at_epoch: number;
+  }[];
+  observations: Observation[];
+  detailedIds: number[];
+}
+
+export function getContextPreview(project?: string): Promise<ContextBreakdown> {
   const params = new URLSearchParams();
   if (project) params.set('project', project);
   return fetchJson(`/api/dashboard/context-preview?${params}`);
