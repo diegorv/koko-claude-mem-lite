@@ -18,12 +18,17 @@ const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
 
 async function workerFetch(path: string, options?: RequestInit): Promise<Response | null> {
   try {
-    return await fetch(`${WORKER_BASE}${path}`, {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000); // 10s timeout
+    const res = await fetch(`${WORKER_BASE}${path}`, {
       ...options,
+      signal: controller.signal,
       headers: { 'Content-Type': 'application/json', ...options?.headers },
     });
+    clearTimeout(timeout);
+    return res;
   } catch {
-    // Worker unavailable — graceful degradation
+    // Worker unavailable or timeout — graceful degradation
     return null;
   }
 }

@@ -175,10 +175,15 @@ import { fileURLToPath } from "url";
 var WORKER_BASE = `http://127.0.0.1:${getSetting("WORKER_PORT")}`;
 async function workerFetch(path, options) {
   try {
-    return await fetch(`${WORKER_BASE}${path}`, {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1e4);
+    const res = await fetch(`${WORKER_BASE}${path}`, {
       ...options,
+      signal: controller.signal,
       headers: { "Content-Type": "application/json", ...options?.headers }
     });
+    clearTimeout(timeout);
+    return res;
   } catch {
     return null;
   }

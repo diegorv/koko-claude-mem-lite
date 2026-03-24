@@ -65,7 +65,7 @@ app.post('/api/sessions', async (c) => {
   }
 });
 
-// Store observation (multi-turn observer with single-turn fallback)
+// Store observation (multi-turn observer — fire-and-forget to avoid blocking hooks)
 app.post('/api/observations', async (c) => {
   try {
     const { contentSessionId, tool_name, tool_input, tool_response, cwd } = await c.req.json();
@@ -79,20 +79,18 @@ app.post('/api/observations', async (c) => {
     const cleanInput = stripPrivateTags(tool_input || '');
     const cleanResponse = stripPrivateTags(tool_response || '');
 
-    // Try multi-turn observer first, fall back to single-turn
-    let parsed;
+    // Enqueue observation and return immediately — don't block the hook process
     const observer = getObserver(contentSessionId);
     if (observer) {
-      try {
-        parsed = await observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd);
-      } catch (err) {
-        console.error('[routes] Observer failed, falling back to single-turn:', err);
-        parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
-      }
-    } else {
-      // No observer session (e.g., worker restarted mid-session) — use single-turn
-      parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+      // Fire-and-forget: pushObservation enqueues to DurableQueue, SDK processes async
+      observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd).catch(err => {
+        console.error('[routes] Observer pushObservation error:', err);
+      });
+      return c.json({ ok: true, queued: true });
     }
+
+    // No observer session — use single-turn fallback (still awaited for result)
+    const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
 
     if (!parsed || parsed.type === 'skip') {
       return c.json({ ok: true, skipped: true });
@@ -125,19 +123,17 @@ app.post('/api/summarize', async (c) => {
       return c.json({ ok: true, skipped: true, reason: 'no meaningful assistant message' });
     }
 
-    // Try multi-turn observer first, fall back to single-turn
-    let summary;
+    // Fire-and-forget for observer path (storage handled internally)
     const observer = getObserver(contentSessionId);
     if (observer) {
-      try {
-        summary = await observer.pushSummary(last_assistant_message);
-      } catch (err) {
-        console.error('[routes] Observer summary failed, falling back:', err);
-        summary = await generateSummary(last_assistant_message);
-      }
-    } else {
-      summary = await generateSummary(last_assistant_message);
+      observer.pushSummary(last_assistant_message).catch(err => {
+        console.error('[routes] Observer pushSummary error:', err);
+      });
+      return c.json({ ok: true, queued: true });
     }
+
+    // No observer — single-turn fallback
+    const summary = await generateSummary(last_assistant_message);
     if (!summary) return c.json({ ok: true, skipped: true, reason: 'AI summary failed' });
 
     // Skip summaries that are clearly empty/trivial

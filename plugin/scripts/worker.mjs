@@ -3751,6 +3751,67 @@ function getPendingCount(contentSessionId) {
   return row.count;
 }
 
+// src/embeddings/embeddings.ts
+async function generateEmbedding(text) {
+  const ollamaUrl = getSetting("OLLAMA_URL");
+  const model = getSetting("OLLAMA_MODEL");
+  try {
+    const response = await fetch(`${ollamaUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, input: text })
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!data.embeddings?.[0]) return null;
+    return new Float32Array(data.embeddings[0]);
+  } catch {
+    return null;
+  }
+}
+function storeEmbedding(db2, observationId, embedding) {
+  try {
+    db2.prepare(
+      "INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))"
+    ).run(observationId, Buffer.from(embedding.buffer));
+    return true;
+  } catch (error) {
+    console.error("[embeddings] Failed to store embedding:", error);
+    return false;
+  }
+}
+async function searchSemantic(db2, query3, limit = 10) {
+  const embedding = await generateEmbedding(query3);
+  if (!embedding) return [];
+  try {
+    const results = db2.prepare(
+      `SELECT observation_id, distance
+       FROM observations_vec
+       WHERE embedding MATCH vec_f32(?)
+       ORDER BY distance
+       LIMIT ?`
+    ).all(Buffer.from(embedding.buffer), limit);
+    return results.map((r) => ({
+      observationId: r.observation_id,
+      distance: r.distance
+    }));
+  } catch (error) {
+    console.error("[embeddings] Semantic search failed:", error);
+    return [];
+  }
+}
+async function embedObservation(db2, observationId, title, narrative, facts) {
+  const parts = [];
+  if (title) parts.push(title);
+  if (narrative) parts.push(narrative);
+  if (facts.length > 0) parts.push(facts.join(". "));
+  const text = parts.join(" \u2014 ");
+  if (!text) return false;
+  const embedding = await generateEmbedding(text);
+  if (!embedding) return false;
+  return storeEmbedding(db2, observationId, embedding);
+}
+
 // src/worker/observer.ts
 var SYSTEM_PROMPT = `You are a specialized observer creating searchable memory FOR FUTURE SESSIONS.
 
@@ -3864,8 +3925,10 @@ var DurableQueue = class {
   emitter = new EventEmitter();
   closed = false;
   contentSessionId;
-  constructor(contentSessionId) {
+  signal;
+  constructor(contentSessionId, signal) {
     this.contentSessionId = contentSessionId;
+    this.signal = signal;
   }
   push(kind, prompt) {
     const id = enqueuePending(this.contentSessionId, kind, prompt);
@@ -3877,8 +3940,15 @@ var DurableQueue = class {
     this.emitter.emit("message");
   }
   async *[Symbol.asyncIterator]() {
-    while (!this.closed) {
-      const msg = claimNextPending(this.contentSessionId);
+    while (!this.closed && !this.signal?.aborted) {
+      let msg = null;
+      try {
+        msg = claimNextPending(this.contentSessionId);
+      } catch (err) {
+        console.error("[queue] Error claiming message, backing off:", err);
+        await new Promise((resolve) => setTimeout(resolve, 1e3));
+        continue;
+      }
       if (msg) {
         yield msg;
         continue;
@@ -3888,13 +3958,21 @@ var DurableQueue = class {
           clearTimeout(timer);
           resolve(true);
         };
+        const onAbort = () => {
+          clearTimeout(timer);
+          this.emitter.removeListener("message", onMessage);
+          resolve(false);
+        };
         const timer = setTimeout(() => {
           this.emitter.removeListener("message", onMessage);
+          this.signal?.removeEventListener("abort", onAbort);
           resolve(false);
         }, IDLE_TIMEOUT_MS);
         this.emitter.once("message", onMessage);
+        this.signal?.addEventListener("abort", onAbort, { once: true });
       });
       if (!gotMessage) {
+        if (this.signal?.aborted) break;
         const recovered = claimNextPending(this.contentSessionId);
         if (recovered) {
           yield recovered;
@@ -3908,17 +3986,17 @@ var DurableQueue = class {
 var ObserverSession = class {
   queue;
   pendingResults = /* @__PURE__ */ new Map();
-  conversationPromise;
   destroyed = false;
   memorySessionId;
+  abortController = new AbortController();
   contentSessionId;
   project;
   constructor(contentSessionId, project, userPrompt, memorySessionId) {
     this.contentSessionId = contentSessionId;
     this.project = project;
     this.memorySessionId = memorySessionId || null;
-    this.queue = new DurableQueue(contentSessionId);
-    this.conversationPromise = this.runConversation(project, userPrompt);
+    this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
+    this.runConversation(project, userPrompt);
   }
   async pushObservation(toolName, toolInput, toolResponse, cwd) {
     if (this.destroyed) return null;
@@ -3939,6 +4017,7 @@ var ObserverSession = class {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.abortController.abort();
     this.queue.close();
     for (const [, pending] of this.pendingResults) {
       pending.resolve(null);
@@ -4014,13 +4093,48 @@ var ObserverSession = class {
   }
   resolveAndCleanup(msg, text) {
     deletePending(msg.id);
-    const pending = this.pendingResults.get(msg.id);
-    if (pending) {
-      this.pendingResults.delete(msg.id);
-      if (msg.kind === "observation") {
-        pending.resolve(text ? parseObservationXml(text) : null);
-      } else {
-        pending.resolve(text ? parseSummaryXml(text) : null);
+    if (msg.kind === "observation" && text) {
+      const parsed = parseObservationXml(text);
+      if (parsed && parsed.type !== "skip") {
+        const session = getSessionByContentId(this.contentSessionId);
+        if (session) {
+          try {
+            const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
+            if (!result.deduplicated) {
+              embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => console.error("[observer] embedding failed:", err));
+            }
+          } catch (err) {
+            console.error("[observer] Failed to store observation:", err);
+          }
+        }
+      }
+      const pending = this.pendingResults.get(msg.id);
+      if (pending) {
+        this.pendingResults.delete(msg.id);
+        pending.resolve(parsed ?? null);
+      }
+    } else if (msg.kind === "summary" && text) {
+      const parsed = parseSummaryXml(text);
+      if (parsed) {
+        const session = getSessionByContentId(this.contentSessionId);
+        if (session) {
+          try {
+            storeSummary(session.id, session.project, parsed);
+          } catch (err) {
+            console.error("[observer] Failed to store summary:", err);
+          }
+        }
+      }
+      const pending = this.pendingResults.get(msg.id);
+      if (pending) {
+        this.pendingResults.delete(msg.id);
+        pending.resolve(parsed ?? null);
+      }
+    } else {
+      const pending = this.pendingResults.get(msg.id);
+      if (pending) {
+        this.pendingResults.delete(msg.id);
+        pending.resolve(null);
       }
     }
   }
@@ -4074,67 +4188,6 @@ function isEntirelyPrivate(content) {
   return stripPrivateTags(content).length === 0;
 }
 
-// src/embeddings/embeddings.ts
-async function generateEmbedding(text) {
-  const ollamaUrl = getSetting("OLLAMA_URL");
-  const model = getSetting("OLLAMA_MODEL");
-  try {
-    const response = await fetch(`${ollamaUrl}/api/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, input: text })
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    if (!data.embeddings?.[0]) return null;
-    return new Float32Array(data.embeddings[0]);
-  } catch {
-    return null;
-  }
-}
-function storeEmbedding(db2, observationId, embedding) {
-  try {
-    db2.prepare(
-      "INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))"
-    ).run(observationId, Buffer.from(embedding.buffer));
-    return true;
-  } catch (error) {
-    console.error("[embeddings] Failed to store embedding:", error);
-    return false;
-  }
-}
-async function searchSemantic(db2, query3, limit = 10) {
-  const embedding = await generateEmbedding(query3);
-  if (!embedding) return [];
-  try {
-    const results = db2.prepare(
-      `SELECT observation_id, distance
-       FROM observations_vec
-       WHERE embedding MATCH vec_f32(?)
-       ORDER BY distance
-       LIMIT ?`
-    ).all(Buffer.from(embedding.buffer), limit);
-    return results.map((r) => ({
-      observationId: r.observation_id,
-      distance: r.distance
-    }));
-  } catch (error) {
-    console.error("[embeddings] Semantic search failed:", error);
-    return [];
-  }
-}
-async function embedObservation(db2, observationId, title, narrative, facts) {
-  const parts = [];
-  if (title) parts.push(title);
-  if (narrative) parts.push(narrative);
-  if (facts.length > 0) parts.push(facts.join(". "));
-  const text = parts.join(" \u2014 ");
-  if (!text) return false;
-  const embedding = await generateEmbedding(text);
-  if (!embedding) return false;
-  return storeEmbedding(db2, observationId, embedding);
-}
-
 // src/worker/routes.ts
 var app = new Hono2();
 var MAX_LIMIT = 500;
@@ -4180,18 +4233,14 @@ app.post("/api/observations", async (c) => {
     if (!session) return c.json({ error: "Session not found" }, 404);
     const cleanInput = stripPrivateTags(tool_input || "");
     const cleanResponse = stripPrivateTags(tool_response || "");
-    let parsed;
     const observer = getObserver(contentSessionId);
     if (observer) {
-      try {
-        parsed = await observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd);
-      } catch (err) {
-        console.error("[routes] Observer failed, falling back to single-turn:", err);
-        parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
-      }
-    } else {
-      parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+      observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd).catch((err) => {
+        console.error("[routes] Observer pushObservation error:", err);
+      });
+      return c.json({ ok: true, queued: true });
     }
+    const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
     if (!parsed || parsed.type === "skip") {
       return c.json({ ok: true, skipped: true });
     }
@@ -4214,18 +4263,14 @@ app.post("/api/summarize", async (c) => {
     if (!last_assistant_message || last_assistant_message.trim().length < 100) {
       return c.json({ ok: true, skipped: true, reason: "no meaningful assistant message" });
     }
-    let summary;
     const observer = getObserver(contentSessionId);
     if (observer) {
-      try {
-        summary = await observer.pushSummary(last_assistant_message);
-      } catch (err) {
-        console.error("[routes] Observer summary failed, falling back:", err);
-        summary = await generateSummary(last_assistant_message);
-      }
-    } else {
-      summary = await generateSummary(last_assistant_message);
+      observer.pushSummary(last_assistant_message).catch((err) => {
+        console.error("[routes] Observer pushSummary error:", err);
+      });
+      return c.json({ ok: true, queued: true });
     }
+    const summary = await generateSummary(last_assistant_message);
     if (!summary) return c.json({ ok: true, skipped: true, reason: "AI summary failed" });
     const hasContent = summary.completed || summary.learned || summary.investigated;
     const isTrivial = hasContent && /nothing|no .*(finding|change|work|action|interaction)/i.test(

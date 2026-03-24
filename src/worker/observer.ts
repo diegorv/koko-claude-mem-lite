@@ -8,7 +8,9 @@ import { EventEmitter } from 'events';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
 import { enqueuePending, claimNextPending, deletePending, getPendingCount, forceUnstickAll, type PendingMessage } from '../db/pending-store.js';
-import { setMemorySessionId, getMemorySessionId } from '../db/queries.js';
+import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
+import { embedObservation } from '../embeddings/embeddings.js';
+import { getDb } from '../db/database.js';
 
 // --- Prompts (adapted from claude-mem) ---
 
@@ -131,9 +133,11 @@ class DurableQueue {
   private emitter = new EventEmitter();
   private closed = false;
   private contentSessionId: string;
+  private signal?: AbortSignal;
 
-  constructor(contentSessionId: string) {
+  constructor(contentSessionId: string, signal?: AbortSignal) {
     this.contentSessionId = contentSessionId;
+    this.signal = signal;
   }
 
   push(kind: 'observation' | 'summary', prompt: string): number {
@@ -148,8 +152,16 @@ class DurableQueue {
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<PendingMessage> {
-    while (!this.closed) {
-      const msg = claimNextPending(this.contentSessionId);
+    while (!this.closed && !this.signal?.aborted) {
+      let msg: PendingMessage | null = null;
+      try {
+        msg = claimNextPending(this.contentSessionId);
+      } catch (err) {
+        console.error('[queue] Error claiming message, backing off:', err);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
       if (msg) {
         yield msg;
         continue;
@@ -161,15 +173,23 @@ class DurableQueue {
           clearTimeout(timer);
           resolve(true);
         };
+        const onAbort = () => {
+          clearTimeout(timer);
+          this.emitter.removeListener('message', onMessage);
+          resolve(false);
+        };
         const timer = setTimeout(() => {
           this.emitter.removeListener('message', onMessage);
+          this.signal?.removeEventListener('abort', onAbort);
           resolve(false);
         }, IDLE_TIMEOUT_MS);
 
         this.emitter.once('message', onMessage);
+        this.signal?.addEventListener('abort', onAbort, { once: true });
       });
 
       if (!gotMessage) {
+        if (this.signal?.aborted) break;
         // Final check: stuck messages may now be past STUCK_TIMEOUT_MS
         const recovered = claimNextPending(this.contentSessionId);
         if (recovered) {
@@ -193,9 +213,9 @@ interface PendingResult<T> {
 export class ObserverSession {
   private queue: DurableQueue;
   private pendingResults = new Map<number, PendingResult<ParsedObservation | ParsedSummary | null>>();
-  private conversationPromise: Promise<void>;
   private destroyed = false;
   private memorySessionId: string | null;
+  private abortController = new AbortController();
 
   readonly contentSessionId: string;
   readonly project: string;
@@ -204,9 +224,9 @@ export class ObserverSession {
     this.contentSessionId = contentSessionId;
     this.project = project;
     this.memorySessionId = memorySessionId || null;
-    this.queue = new DurableQueue(contentSessionId);
+    this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
 
-    this.conversationPromise = this.runConversation(project, userPrompt);
+    this.runConversation(project, userPrompt);
   }
 
   async pushObservation(
@@ -236,6 +256,7 @@ export class ObserverSession {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.abortController.abort();
     this.queue.close();
 
     for (const [, pending] of this.pendingResults) {
@@ -331,13 +352,50 @@ export class ObserverSession {
     // Delete from durable store FIRST to prevent reprocessing on crash
     deletePending(msg.id);
 
-    const pending = this.pendingResults.get(msg.id);
-    if (pending) {
-      this.pendingResults.delete(msg.id);
-      if (msg.kind === 'observation') {
-        pending.resolve(text ? parseObservationXml(text) : null);
-      } else {
-        pending.resolve(text ? parseSummaryXml(text) : null);
+    if (msg.kind === 'observation' && text) {
+      const parsed = parseObservationXml(text);
+      if (parsed && parsed.type !== 'skip') {
+        const session = getSessionByContentId(this.contentSessionId);
+        if (session) {
+          try {
+            const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
+            if (!result.deduplicated) {
+              embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
+                .catch(err => console.error('[observer] embedding failed:', err));
+            }
+          } catch (err) {
+            console.error('[observer] Failed to store observation:', err);
+          }
+        }
+      }
+      // Resolve pending promise (for any callers still awaiting)
+      const pending = this.pendingResults.get(msg.id);
+      if (pending) {
+        this.pendingResults.delete(msg.id);
+        pending.resolve(parsed ?? null);
+      }
+    } else if (msg.kind === 'summary' && text) {
+      const parsed = parseSummaryXml(text);
+      if (parsed) {
+        const session = getSessionByContentId(this.contentSessionId);
+        if (session) {
+          try {
+            storeSummary(session.id, session.project, parsed);
+          } catch (err) {
+            console.error('[observer] Failed to store summary:', err);
+          }
+        }
+      }
+      const pending = this.pendingResults.get(msg.id);
+      if (pending) {
+        this.pendingResults.delete(msg.id);
+        pending.resolve(parsed ?? null);
+      }
+    } else {
+      const pending = this.pendingResults.get(msg.id);
+      if (pending) {
+        this.pendingResults.delete(msg.id);
+        pending.resolve(null);
       }
     }
   }
