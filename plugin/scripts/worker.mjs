@@ -3608,6 +3608,15 @@ Output format (one line per item, in order):
 </decisions>
 
 Be aggressive about deleting noise. When in doubt about whether something is useful development context, KEEP it. But pure meta-noise should always be DELETED.`;
+async function reviewForCleanup(items) {
+  if (items.length === 0) return [];
+  const itemList = items.map(
+    (i) => `[${i.type}#${i.id}] ${i.text}`
+  ).join("\n\n");
+  const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
+  if (!text) return [];
+  return parseCleanupResults(text, items);
+}
 function parseCleanupResults(text, items) {
   const results = [];
   const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
@@ -3625,60 +3634,6 @@ function parseCleanupResults(text, items) {
     }
   }
   return results;
-}
-async function* reviewForCleanupStream(items) {
-  if (items.length === 0) {
-    yield { type: "done", data: { results: [] } };
-    return;
-  }
-  yield { type: "progress", data: { message: `Reviewing ${items.length} items...`, phase: "starting" } };
-  const itemList = items.map(
-    (i) => `[${i.type}#${i.id}] ${i.text}`
-  ).join("\n\n");
-  try {
-    const conversation = query({
-      prompt: itemList,
-      options: {
-        model: "claude-sonnet-4-6",
-        systemPrompt: CLEANUP_SYSTEM_PROMPT,
-        maxTurns: 1,
-        tools: [],
-        disallowedTools: ["*"]
-      }
-    });
-    let fullText = "";
-    let lastParsedCount = 0;
-    for await (const message of conversation) {
-      if (message.type === "assistant" && message.message?.content) {
-        for (const block of message.message.content) {
-          if (block.type === "text") {
-            fullText = block.text;
-            const partialResults = parseCleanupResults(fullText, items);
-            if (partialResults.length > lastParsedCount) {
-              for (let i = lastParsedCount; i < partialResults.length; i++) {
-                yield { type: "result", data: partialResults[i] };
-              }
-              lastParsedCount = partialResults.length;
-              yield { type: "progress", data: { message: `${lastParsedCount}/${items.length} reviewed`, phase: "analyzing" } };
-            }
-          }
-        }
-      }
-      if (message.type === "result" && message.subtype === "success") {
-        fullText = message.result;
-      }
-    }
-    const finalResults = parseCleanupResults(fullText, items);
-    if (finalResults.length > lastParsedCount) {
-      for (let i = lastParsedCount; i < finalResults.length; i++) {
-        yield { type: "result", data: finalResults[i] };
-      }
-    }
-    yield { type: "done", data: { results: finalResults, totalReviewed: items.length } };
-  } catch (error) {
-    console.error("[summarizer] Streaming cleanup failed:", error);
-    yield { type: "done", data: { results: [], error: "Cleanup failed" } };
-  }
 }
 
 // src/utils/privacy.ts
@@ -4149,12 +4104,12 @@ data: ${JSON.stringify(data)}
 
 `));
           };
+          send("items", { items: items.map((i) => ({ id: i.id, type: i.type, text: i.text })) });
           try {
-            for await (const chunk of reviewForCleanupStream(items)) {
-              send(chunk.type, chunk.data);
-            }
+            const results = await reviewForCleanup(items);
+            send("done", { results, totalReviewed: items.length });
           } catch (err) {
-            send("done", { results: [], error: "Stream failed" });
+            send("done", { results: [], error: "Cleanup failed" });
           }
           controller.close();
         }
