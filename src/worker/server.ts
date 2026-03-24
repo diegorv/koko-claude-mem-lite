@@ -43,6 +43,12 @@ function shutdown(): void {
   if (shutdownInitiated) return;
   shutdownInitiated = true;
 
+  const forceTimer = setTimeout(() => {
+    console.error('[worker] Graceful shutdown timed out after 10s, force exiting');
+    process.exit(1);
+  }, 10_000);
+  forceTimer.unref();
+
   console.log('[worker] Shutting down...');
   destroyAllObservers();
   removePid();
