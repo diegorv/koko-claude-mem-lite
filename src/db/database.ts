@@ -103,6 +103,7 @@ function initializeSchema(database: Database.Database): void {
   database.pragma('foreign_keys = ON');
   database.pragma('cache_size = 10000');
   database.pragma('busy_timeout = 5000');
+  database.pragma('mmap_size = 268435456'); // 256MB mmap for improved read performance
 
   let currentVersion = 0;
   try {
