@@ -3776,7 +3776,12 @@ async function generateEmbedding(text) {
     return null;
   }
 }
+var EXPECTED_EMBEDDING_DIM = 1024;
 function storeEmbedding(db2, observationId, embedding) {
+  if (embedding.length !== EXPECTED_EMBEDDING_DIM) {
+    console.error(`[embeddings] Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
+    return false;
+  }
   try {
     db2.prepare(
       "INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))"
@@ -3964,6 +3969,7 @@ var DurableQueue = class {
       const gotMessage = await new Promise((resolve) => {
         const onMessage = () => {
           clearTimeout(timer);
+          this.signal?.removeEventListener("abort", onAbort);
           resolve(true);
         };
         const onAbort = () => {
@@ -4102,13 +4108,6 @@ var ObserverSession = class _ObserverSession {
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
         console.log(`[observer] ${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
         forceUnstickAll(this.contentSessionId);
-        this.destroyed = true;
-        this.abortController.abort();
-        this.queue.close();
-        for (const [, pending] of this.pendingResults) {
-          pending.resolve(null);
-        }
-        this.pendingResults.clear();
         const replacement = new _ObserverSession(
           this.contentSessionId,
           this.project,
@@ -4117,6 +4116,13 @@ var ObserverSession = class _ObserverSession {
           this.restartCount + 1
         );
         activeSessions.set(this.contentSessionId, replacement);
+        this.destroyed = true;
+        this.abortController.abort();
+        this.queue.close();
+        for (const [, pending] of this.pendingResults) {
+          pending.resolve(null);
+        }
+        this.pendingResults.clear();
       } else {
         if (remainingCount > 0) {
           console.warn(`[observer] ${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
@@ -4126,7 +4132,6 @@ var ObserverSession = class _ObserverSession {
     }
   }
   resolveAndCleanup(msg, text) {
-    deletePending(msg.id);
     if (msg.kind === "observation" && text) {
       const parsed = parseObservationXml(text);
       if (parsed && parsed.type !== "skip") {
@@ -4134,13 +4139,19 @@ var ObserverSession = class _ObserverSession {
         if (session) {
           try {
             const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
+            deletePending(msg.id);
             if (!result.deduplicated) {
               embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => console.error("[observer] embedding failed:", err));
             }
           } catch (err) {
             console.error("[observer] Failed to store observation:", err);
+            return;
           }
+        } else {
+          deletePending(msg.id);
         }
+      } else {
+        deletePending(msg.id);
       }
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
@@ -4154,10 +4165,16 @@ var ObserverSession = class _ObserverSession {
         if (session) {
           try {
             storeSummary(session.id, session.project, parsed);
+            deletePending(msg.id);
           } catch (err) {
             console.error("[observer] Failed to store summary:", err);
+            return;
           }
+        } else {
+          deletePending(msg.id);
         }
+      } else {
+        deletePending(msg.id);
       }
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
@@ -4165,6 +4182,7 @@ var ObserverSession = class _ObserverSession {
         pending.resolve(parsed ?? null);
       }
     } else {
+      deletePending(msg.id);
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
         this.pendingResults.delete(msg.id);
@@ -4349,13 +4367,13 @@ app.get("/api/dashboard/sessions", (c) => {
     const sessions = db2.prepare(`
       SELECT s.*,
         (SELECT COUNT(*) FROM observations o WHERE o.session_id = s.id) as observation_count,
-        json_object(
+        CASE WHEN sm.id IS NOT NULL THEN json_object(
           'request', sm.request,
           'investigated', sm.investigated,
           'learned', sm.learned,
           'completed', sm.completed,
           'next_steps', sm.next_steps
-        ) as summary
+        ) ELSE NULL END as summary
       FROM sessions s
       LEFT JOIN summaries sm ON sm.session_id = s.id
       ${whereClause}
@@ -4704,7 +4722,7 @@ if (existsSync4(uiPath)) {
   });
   app.use("/*", serveStatic({ root: uiPath }));
 }
-var port = parseInt(getSetting("WORKER_PORT"));
+var port = getSetting("WORKER_PORT");
 var pidPath = getPidPath();
 function writePid() {
   const info = { pid: process.pid, port, startedAt: Date.now() };
