@@ -172,6 +172,7 @@ class DurableQueue {
       const gotMessage = await new Promise<boolean>((resolve) => {
         const onMessage = () => {
           clearTimeout(timer);
+          this.signal?.removeEventListener('abort', onAbort);
           resolve(true);
         };
         const onAbort = () => {
