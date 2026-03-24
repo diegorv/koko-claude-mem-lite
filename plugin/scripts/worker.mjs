@@ -2961,21 +2961,31 @@ CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
   VALUES (new.id, new.title, new.narrative, new.facts);
 END;
 `;
+var MIGRATIONS = {
+  // Example for future use:
+  // 3: (db) => { db.exec('ALTER TABLE observations ADD COLUMN embedding_model TEXT'); },
+};
 function initializeSchema(database) {
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   database.pragma("cache_size = 10000");
-  const versionRow = (() => {
-    try {
-      return database.prepare("SELECT version FROM schema_version LIMIT 1").get();
-    } catch {
-      return void 0;
-    }
-  })();
-  if (!versionRow || versionRow.version < SCHEMA_VERSION) {
-    database.exec(SCHEMA_SQL);
-    database.prepare("INSERT OR REPLACE INTO schema_version (version) VALUES (?)").run(SCHEMA_VERSION);
+  let currentVersion = 0;
+  try {
+    const row = database.prepare("SELECT version FROM schema_version LIMIT 1").get();
+    currentVersion = row?.version || 0;
+  } catch {
   }
+  if (currentVersion < 1) {
+    database.exec(SCHEMA_SQL);
+    currentVersion = SCHEMA_VERSION;
+  }
+  for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
+    const migrate = MIGRATIONS[v];
+    if (migrate) {
+      migrate(database);
+    }
+  }
+  database.prepare("INSERT OR REPLACE INTO schema_version (version) VALUES (?)").run(SCHEMA_VERSION);
 }
 function tryLoadSqliteVec(database) {
   try {
@@ -3721,6 +3731,11 @@ function claimNextPending(contentSessionId) {
 function deletePending(id) {
   getDb().prepare("DELETE FROM pending_messages WHERE id = ?").run(id);
 }
+function forceUnstickAll(contentSessionId) {
+  return getDb().prepare(
+    "UPDATE pending_messages SET status = ? WHERE content_session_id = ? AND status = ?"
+  ).run("pending", contentSessionId, "processing").changes;
+}
 function getPendingCount(contentSessionId) {
   const row = getDb().prepare(
     "SELECT COUNT(*) as count FROM pending_messages WHERE content_session_id = ?"
@@ -3861,16 +3876,22 @@ var DurableQueue = class {
         continue;
       }
       const gotMessage = await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          this.emitter.removeAllListeners("message");
-          resolve(false);
-        }, IDLE_TIMEOUT_MS);
-        this.emitter.once("message", () => {
+        const onMessage = () => {
           clearTimeout(timer);
           resolve(true);
-        });
+        };
+        const timer = setTimeout(() => {
+          this.emitter.removeListener("message", onMessage);
+          resolve(false);
+        }, IDLE_TIMEOUT_MS);
+        this.emitter.once("message", onMessage);
       });
       if (!gotMessage) {
+        const recovered = claimNextPending(this.contentSessionId);
+        if (recovered) {
+          yield recovered;
+          continue;
+        }
         break;
       }
     }
@@ -3984,6 +4005,7 @@ var ObserverSession = class {
     }
   }
   resolveAndCleanup(msg, text) {
+    deletePending(msg.id);
     const pending = this.pendingResults.get(msg.id);
     if (pending) {
       this.pendingResults.delete(msg.id);
@@ -3993,7 +4015,6 @@ var ObserverSession = class {
         pending.resolve(text ? parseSummaryXml(text) : null);
       }
     }
-    deletePending(msg.id);
   }
 };
 var activeSessions = /* @__PURE__ */ new Map();
@@ -4003,6 +4024,10 @@ function getOrCreateObserver(contentSessionId, project, userPrompt) {
   const memorySessionId = getMemorySessionId(contentSessionId);
   const hasPending = getPendingCount(contentSessionId) > 0;
   if (memorySessionId) {
+    if (hasPending) {
+      const unstuck = forceUnstickAll(contentSessionId);
+      if (unstuck > 0) console.log(`[observer] Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+    }
     console.log(`[observer] Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? "has" : "no"} pending)`);
   }
   session = new ObserverSession(contentSessionId, project, userPrompt, memorySessionId);
@@ -4104,6 +4129,12 @@ async function embedObservation(db2, observationId, title, narrative, facts) {
 
 // src/worker/routes.ts
 var app = new Hono2();
+var MAX_LIMIT = 500;
+var MAX_DEPTH = 50;
+var MAX_BATCH = 100;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 app.get("/api/health", (c) => c.json({ ok: true }));
 app.get("/api/context", (c) => {
   try {
@@ -4217,8 +4248,8 @@ app.post("/api/sessions/complete", async (c) => {
 app.get("/api/dashboard/sessions", (c) => {
   try {
     const project = c.req.query("project");
-    const limit = parseInt(c.req.query("limit") || "50");
-    const offset = parseInt(c.req.query("offset") || "0");
+    const limit = clamp(parseInt(c.req.query("limit") || "50"), 1, MAX_LIMIT);
+    const offset = Math.max(0, parseInt(c.req.query("offset") || "0"));
     const db2 = getDb();
     const whereClause = project ? "WHERE s.project = ?" : "";
     const params = project ? [project, limit, offset] : [limit, offset];
@@ -4310,20 +4341,24 @@ app.get("/api/dashboard/stats", (c) => {
 app.get("/api/dashboard/feed", (c) => {
   try {
     const project = c.req.query("project");
-    const limit = parseInt(c.req.query("limit") || "30");
+    const limit = clamp(parseInt(c.req.query("limit") || "30"), 1, MAX_LIMIT);
     const before = c.req.query("before");
     const db2 = getDb();
-    const conditions = [];
+    const obsConditions = [];
+    const sumConditions = [];
     const params = [];
     if (project) {
-      conditions.push("project = ?");
+      obsConditions.push("o.project = ?");
+      sumConditions.push("sm.project = ?");
       params.push(project);
     }
     if (before) {
-      conditions.push("created_at_epoch < ?");
+      obsConditions.push("o.created_at_epoch < ?");
+      sumConditions.push("sm.created_at_epoch < ?");
       params.push(parseInt(before));
     }
-    const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+    const obsWhere = obsConditions.length > 0 ? "WHERE " + obsConditions.join(" AND ") : "";
+    const sumWhere = sumConditions.length > 0 ? "WHERE " + sumConditions.join(" AND ") : "";
     const obs = db2.prepare(`
       SELECT o.id, o.session_id, o.project, o.type, o.title, o.facts, o.narrative,
         o.files_read, o.files_modified, o.created_at, o.created_at_epoch,
@@ -4331,7 +4366,7 @@ app.get("/api/dashboard/feed", (c) => {
         'observation' as item_type
       FROM observations o
       JOIN sessions s ON s.id = o.session_id
-      ${where ? where.replace(/project/g, "o.project").replace(/created_at_epoch/g, "o.created_at_epoch") : ""}
+      ${obsWhere}
       ORDER BY o.created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
     const sums = db2.prepare(`
@@ -4341,7 +4376,7 @@ app.get("/api/dashboard/feed", (c) => {
         'summary' as item_type
       FROM summaries sm
       JOIN sessions s ON s.id = sm.session_id
-      ${where ? where.replace(/project/g, "sm.project").replace(/created_at_epoch/g, "sm.created_at_epoch") : ""}
+      ${sumWhere}
       ORDER BY sm.created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
     const feed = [...obs, ...sums].sort((a, b) => b.created_at_epoch - a.created_at_epoch).slice(0, limit);
@@ -4361,8 +4396,8 @@ app.get("/api/search/index", (c) => {
       type: c.req.query("type"),
       dateStart: c.req.query("dateStart"),
       dateEnd: c.req.query("dateEnd"),
-      limit: parseInt(c.req.query("limit") || "20"),
-      offset: parseInt(c.req.query("offset") || "0")
+      limit: clamp(parseInt(c.req.query("limit") || "20"), 1, MAX_LIMIT),
+      offset: Math.max(0, parseInt(c.req.query("offset") || "0"))
     });
     const formatted = formatSearchIndex(results);
     return c.json({ content: [{ type: "text", text: formatted }] });
@@ -4375,8 +4410,8 @@ app.get("/api/timeline", (c) => {
   try {
     const anchorId = parseInt(c.req.query("anchor") || "");
     if (isNaN(anchorId)) return c.json({ error: "anchor parameter required (observation ID)" }, 400);
-    const depthBefore = parseInt(c.req.query("depth_before") || "5");
-    const depthAfter = parseInt(c.req.query("depth_after") || "5");
+    const depthBefore = clamp(parseInt(c.req.query("depth_before") || "5"), 1, MAX_DEPTH);
+    const depthAfter = clamp(parseInt(c.req.query("depth_after") || "5"), 1, MAX_DEPTH);
     const project = c.req.query("project");
     const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
     if (!anchor) return c.json({ error: "Observation not found" }, 404);
@@ -4393,6 +4428,9 @@ app.post("/api/observations/batch", async (c) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return c.json({ error: "ids array required" }, 400);
     }
+    if (ids.length > MAX_BATCH) {
+      return c.json({ error: `Too many IDs (max ${MAX_BATCH})` }, 400);
+    }
     const observations = getObservationsByIds(ids.map(Number));
     const formatted = formatObservationsFull(observations);
     return c.json({ content: [{ type: "text", text: formatted }] });
@@ -4406,7 +4444,7 @@ app.get("/api/search", async (c) => {
     const q = c.req.query("q");
     const project = c.req.query("project");
     const mode = c.req.query("mode") || "fts";
-    const limit = parseInt(c.req.query("limit") || "10");
+    const limit = clamp(parseInt(c.req.query("limit") || "10"), 1, MAX_LIMIT);
     if (!q) return c.json({ error: "q parameter required" }, 400);
     if (mode === "semantic") {
       const vecResults = await searchSemantic(getDb(), q, limit);
@@ -4576,7 +4614,8 @@ if (existsSync4(uiPath)) {
 var port = parseInt(getSetting("WORKER_PORT"));
 var pidPath = getPidPath();
 function writePid() {
-  writeFileSync2(pidPath, String(process.pid));
+  const info = { pid: process.pid, port, startedAt: Date.now() };
+  writeFileSync2(pidPath, JSON.stringify(info));
 }
 function removePid() {
   try {
@@ -4593,16 +4632,32 @@ function shutdown() {
 }
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
-if (existsSync4(pidPath)) {
-  const oldPid = parseInt(readFileSync2(pidPath, "utf-8").trim());
+async function checkExistingWorker() {
+  if (!existsSync4(pidPath)) return false;
   try {
+    const raw2 = readFileSync2(pidPath, "utf-8").trim();
+    let oldPid;
+    let oldPort = port;
+    try {
+      const info = JSON.parse(raw2);
+      oldPid = info.pid;
+      oldPort = info.port;
+    } catch {
+      oldPid = parseInt(raw2);
+    }
     process.kill(oldPid, 0);
-    console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
-    process.exit(0);
+    const res = await fetch(`http://127.0.0.1:${oldPort}/api/health`, { signal: AbortSignal.timeout(2e3) });
+    if (res.ok) {
+      console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
+      return true;
+    }
   } catch {
-    removePid();
   }
+  removePid();
+  return false;
 }
+var alreadyRunning = await checkExistingWorker();
+if (alreadyRunning) process.exit(0);
 writePid();
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
   console.log(`[worker] Memory-lite worker running on http://127.0.0.1:${port}`);
