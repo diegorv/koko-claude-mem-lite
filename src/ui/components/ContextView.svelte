@@ -98,15 +98,27 @@
     }
   }
 
+  let deletedMessage = $state('');
+
   async function applyCleanupResults() {
     cleanupApplying = true;
     try {
       const toDelete = cleanupResults.filter(r => r.action === 'delete').map(r => ({ id: r.id, type: r.type }));
+      const obsBefore = data?.observations.length || 0;
+      const sumBefore = data?.summaries.length || 0;
+      const tokensBefore = data?.estimatedTokens || 0;
+
       const res = await applyCleanup(toDelete);
-      cleanupMessage = `Deleted ${res.deleted} items. Refreshing...`;
+
       cleanupResults = [];
       cleanupDone = false;
+      cleanupMessage = '';
       await load();
+
+      const tokensAfter = data?.estimatedTokens || 0;
+      const tokensSaved = tokensBefore - tokensAfter;
+      deletedMessage = `Deleted ${res.deleted} items. Saved ~${tokensSaved.toLocaleString()} tokens (${tokensBefore.toLocaleString()} -> ${tokensAfter.toLocaleString()}).`;
+      setTimeout(() => deletedMessage = '', 8000);
     } catch (err) {
       cleanupMessage = 'Failed to apply cleanup';
       console.error(err);
@@ -229,6 +241,10 @@
         {/each}
       </div>
     </div>
+  {/if}
+
+  {#if deletedMessage}
+    <div class="cleanup-success">{deletedMessage}</div>
   {/if}
 
   {#if cleanupMessage && !cleanupDone}

@@ -992,6 +992,16 @@ a:hover { text-decoration: underline; }
   padding: 8px 0;
 }
 
+.cleanup-success {
+  font-size: 12px;
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.08);
+  border: 1px solid rgba(63, 185, 80, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
 /* Settings */
 .settings-form {
   display: flex;
