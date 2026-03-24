@@ -355,7 +355,15 @@ export class ObserverSession {
         console.log(`[observer] ${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
         forceUnstickAll(this.contentSessionId);
 
-        // Replace self in activeSessions with a new session
+        // Create replacement BEFORE destroying old session to avoid
+        // a window where getObserver() returns undefined
+        const replacement = new ObserverSession(
+          this.contentSessionId, this.project, undefined,
+          this.memorySessionId, this.restartCount + 1,
+        );
+        activeSessions.set(this.contentSessionId, replacement);
+
+        // Now safe to tear down old session
         this.destroyed = true;
         this.abortController.abort();
         this.queue.close();
@@ -363,12 +371,6 @@ export class ObserverSession {
           pending.resolve(null);
         }
         this.pendingResults.clear();
-
-        const replacement = new ObserverSession(
-          this.contentSessionId, this.project, undefined,
-          this.memorySessionId, this.restartCount + 1,
-        );
-        activeSessions.set(this.contentSessionId, replacement);
       } else {
         if (remainingCount > 0) {
           console.warn(`[observer] ${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
