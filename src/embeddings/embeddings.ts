@@ -36,7 +36,13 @@ export async function generateEmbedding(text: string): Promise<Float32Array | nu
 /**
  * Store embedding for an observation.
  */
+const EXPECTED_EMBEDDING_DIM = 1024;
+
 export function storeEmbedding(db: Database.Database, observationId: number, embedding: Float32Array): boolean {
+  if (embedding.length !== EXPECTED_EMBEDDING_DIM) {
+    console.error(`[embeddings] Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
+    return false;
+  }
   try {
     db.prepare(
       'INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))'
