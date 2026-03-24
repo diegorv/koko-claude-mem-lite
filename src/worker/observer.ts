@@ -322,6 +322,9 @@ export class ObserverSession {
   }
 
   private resolveAndCleanup(msg: PendingMessage, text: string): void {
+    // Delete from durable store FIRST to prevent reprocessing on crash
+    deletePending(msg.id);
+
     const pending = this.pendingResults.get(msg.id);
     if (pending) {
       this.pendingResults.delete(msg.id);
@@ -331,8 +334,6 @@ export class ObserverSession {
         pending.resolve(text ? parseSummaryXml(text) : null);
       }
     }
-    // Remove from durable store after processing
-    deletePending(msg.id);
   }
 }
 
