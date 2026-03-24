@@ -5,7 +5,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Query } from '@anthropic-ai/claude-agent-sdk';
 import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
 import { enqueuePending, claimNextPending, deletePending, getPendingCount, forceUnstickAll, type PendingMessage } from '../db/pending-store.js';
 import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
@@ -219,6 +219,8 @@ export class ObserverSession {
   private memorySessionId: string | null;
   private abortController = new AbortController();
   private restartCount: number;
+  private conversation: Query | null = null;
+  lastActivityTime: number = Date.now();
 
   readonly contentSessionId: string;
   readonly project: string;
@@ -237,6 +239,7 @@ export class ObserverSession {
     toolName: string, toolInput: string, toolResponse: string, cwd?: string
   ): Promise<ParsedObservation | null> {
     if (this.destroyed) return null;
+    this.lastActivityTime = Date.now();
 
     const prompt = buildObservationPrompt(toolName, toolInput, toolResponse, cwd);
     const pendingId = this.queue.push('observation', prompt);
@@ -248,6 +251,7 @@ export class ObserverSession {
 
   async pushSummary(lastAssistantMessage: string): Promise<ParsedSummary | null> {
     if (this.destroyed) return null;
+    this.lastActivityTime = Date.now();
 
     const prompt = buildSummaryPrompt(lastAssistantMessage);
     const pendingId = this.queue.push('summary', prompt);
@@ -262,6 +266,12 @@ export class ObserverSession {
     this.destroyed = true;
     this.abortController.abort();
     this.queue.close();
+
+    // Kill the SDK subprocess
+    if (this.conversation) {
+      try { this.conversation.close(); } catch {}
+      this.conversation = null;
+    }
 
     for (const [, pending] of this.pendingResults) {
       pending.resolve(null);
@@ -298,6 +308,7 @@ export class ObserverSession {
         maxTurns: 0,
         tools: [],
         disallowedTools: ['*'],
+        abortController: this.abortController,
       };
 
       // Resume existing conversation if we have a memory session ID
@@ -308,38 +319,60 @@ export class ObserverSession {
       }
 
       const conversation = query(queryArgs);
+      this.conversation = conversation;
 
-      for await (const message of conversation) {
-        // Capture memory session ID from first assistant message
-        if (message.type === 'assistant' && !this.memorySessionId) {
-          const sessionId = (message as any).session_id || (message as any).message?.session_id;
-          if (sessionId) {
-            this.memorySessionId = sessionId;
-            setMemorySessionId(this.contentSessionId, sessionId);
-            console.log(`[observer] Captured memorySessionId for ${this.contentSessionId}`);
+      // Idle timeout: if no SDK messages for 5 min, force-close
+      const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+      let lastMessageTime = Date.now();
+      const idleChecker = setInterval(() => {
+        if (Date.now() - lastMessageTime > QUERY_IDLE_TIMEOUT_MS) {
+          console.warn(`[observer] SDK query idle timeout for ${this.contentSessionId}, aborting`);
+          this.abortController.abort();
+          if (this.conversation) {
+            try { this.conversation.close(); } catch {}
           }
         }
+      }, 30_000);
+      idleChecker.unref();
 
-        // Process assistant response
-        if (message.type === 'assistant' && (message as any).message?.content) {
-          let text = '';
-          for (const block of (message as any).message.content) {
-            if (block.type === 'text') text += block.text;
+      try {
+        for await (const message of conversation) {
+          lastMessageTime = Date.now();
+
+          // Capture memory session ID from first assistant message
+          if (message.type === 'assistant' && !this.memorySessionId) {
+            const sessionId = (message as any).session_id || (message as any).message?.session_id;
+            if (sessionId) {
+              this.memorySessionId = sessionId;
+              setMemorySessionId(this.contentSessionId, sessionId);
+              console.log(`[observer] Captured memorySessionId for ${this.contentSessionId}`);
+            }
           }
 
-          if (currentPendingMsg && text) {
-            this.resolveAndCleanup(currentPendingMsg, text);
-            currentPendingMsg = null;
+          // Process assistant response
+          if (message.type === 'assistant' && (message as any).message?.content) {
+            let text = '';
+            for (const block of (message as any).message.content) {
+              if (block.type === 'text') text += block.text;
+            }
+
+            if (currentPendingMsg && text) {
+              this.resolveAndCleanup(currentPendingMsg, text);
+              currentPendingMsg = null;
+            }
+          }
+
+          if (message.type === 'result' && (message as any).subtype === 'success') {
+            const text = (message as any).result || '';
+            if (currentPendingMsg && text) {
+              this.resolveAndCleanup(currentPendingMsg, text);
+              currentPendingMsg = null;
+            }
           }
         }
-
-        if (message.type === 'result' && (message as any).subtype === 'success') {
-          const text = (message as any).result || '';
-          if (currentPendingMsg && text) {
-            this.resolveAndCleanup(currentPendingMsg, text);
-            currentPendingMsg = null;
-          }
-        }
+      } finally {
+        clearInterval(idleChecker);
+        this.conversation = null;
       }
     } catch (error) {
       console.error('[observer] Conversation error:', error);
@@ -367,6 +400,10 @@ export class ObserverSession {
         this.destroyed = true;
         this.abortController.abort();
         this.queue.close();
+        if (this.conversation) {
+          try { this.conversation.close(); } catch {}
+          this.conversation = null;
+        }
         for (const [, pending] of this.pendingResults) {
           pending.resolve(null);
         }
@@ -497,4 +534,14 @@ export function destroyAllObservers(): void {
     session.destroy();
   }
   activeSessions.clear();
+}
+
+export function getActiveSessionIds(): string[] {
+  return Array.from(activeSessions.keys());
+}
+
+export function getSessionAge(contentSessionId: string): number {
+  const session = activeSessions.get(contentSessionId);
+  if (!session) return Infinity;
+  return Date.now() - session.lastActivityTime;
 }
