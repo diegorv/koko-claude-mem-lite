@@ -45,6 +45,12 @@ export function deletePending(id: number): void {
   getDb().prepare('DELETE FROM pending_messages WHERE id = ?').run(id);
 }
 
+export function forceUnstickAll(contentSessionId: string): number {
+  return getDb().prepare(
+    'UPDATE pending_messages SET status = ? WHERE content_session_id = ? AND status = ?'
+  ).run('pending', contentSessionId, 'processing').changes;
+}
+
 export function getPendingCount(contentSessionId: string): number {
   const row = getDb().prepare(
     'SELECT COUNT(*) as count FROM pending_messages WHERE content_session_id = ?'

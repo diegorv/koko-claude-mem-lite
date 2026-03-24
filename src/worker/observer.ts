@@ -7,7 +7,7 @@
 import { EventEmitter } from 'events';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
-import { enqueuePending, claimNextPending, deletePending, getPendingCount, type PendingMessage } from '../db/pending-store.js';
+import { enqueuePending, claimNextPending, deletePending, getPendingCount, forceUnstickAll, type PendingMessage } from '../db/pending-store.js';
 import { setMemorySessionId, getMemorySessionId } from '../db/queries.js';
 
 // --- Prompts (adapted from claude-mem) ---
@@ -170,7 +170,12 @@ class DurableQueue {
       });
 
       if (!gotMessage) {
-        // Idle timeout
+        // Final check: stuck messages may now be past STUCK_TIMEOUT_MS
+        const recovered = claimNextPending(this.contentSessionId);
+        if (recovered) {
+          yield recovered;
+          continue;
+        }
         break;
       }
     }
@@ -351,6 +356,10 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
   const hasPending = getPendingCount(contentSessionId) > 0;
 
   if (memorySessionId) {
+    if (hasPending) {
+      const unstuck = forceUnstickAll(contentSessionId);
+      if (unstuck > 0) console.log(`[observer] Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+    }
     console.log(`[observer] Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? 'has' : 'no'} pending)`);
   }
 
