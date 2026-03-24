@@ -3504,18 +3504,39 @@ function parseSummaryXml(text) {
     next_steps: extractField(content, "next_steps")
   };
 }
-var OBSERVATION_SYSTEM_PROMPT = `You are a development session observer. You analyze tool usage events and extract structured observations.
+var OBSERVATION_SYSTEM_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
 
-Given a tool use event (tool name, input, output), produce a single XML observation:
+WHAT TO RECORD \u2014 focus on deliverables and knowledge:
+- What the system NOW DOES differently (new capabilities, fixes, configs)
+- Bugs found with root cause ("X broke because Y")
+- Non-obvious gotchas and workarounds
+- Architecture decisions with rationale
+- API behaviors or quirks discovered
 
+WHEN TO SKIP \u2014 output nothing if the tool use is:
+- Empty status checks, simple file listings, package installs with no errors
+- Repetitive operations already documented
+- File reads that reveal nothing surprising
+- Routine edits with no interesting context (import changes, formatting)
+If skipping, output ONLY: <observation><type>skip</type></observation>
+
+TYPES:
+- bugfix: something was broken, now fixed
+- feature: new capability added
+- refactor: code restructured, behavior unchanged
+- discovery: learning about existing system (only if non-obvious insight)
+- decision: architectural/design choice with rationale
+- change: generic modification (docs, config, misc)
+
+FORMAT:
 \`\`\`xml
 <observation>
-  <type>discovery | implementation | debugging | architecture</type>
-  <title>Short descriptive title (5-10 words)</title>
+  <type>bugfix | feature | refactor | discovery | decision | change</type>
+  <title>Short title capturing the core action (5-10 words)</title>
   <facts>
-    <fact>Specific fact learned or action taken</fact>
+    <fact>Concise self-contained statement with specifics (filenames, values, behaviors)</fact>
   </facts>
-  <narrative>2-3 sentence summary of what happened and why it matters</narrative>
+  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
   <files_read>
     <file>path/to/file</file>
   </files_read>
@@ -3525,11 +3546,10 @@ Given a tool use event (tool name, input, output), produce a single XML observat
 </observation>
 \`\`\`
 
-Rules:
-- Extract file paths from tool_input and tool_output
-- Be concise but capture the important details
-- facts should be specific, not generic
-- If the tool use is trivial (e.g., listing files), still extract what was discovered
+CRITICAL RULES:
+- Record what was LEARNED/BUILT/FIXED, not that you are observing
+- NO generic titles like "File X was read" or "Function Y was added" \u2014 capture the INSIGHT
+- facts must be specific and self-contained (no pronouns, include file paths and values)
 - Output ONLY the XML block, nothing else`;
 var SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary.
 
@@ -3592,22 +3612,35 @@ function truncate2(str, maxLen) {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + "... [truncated]";
 }
-var CLEANUP_SYSTEM_PROMPT = `You are a memory quality filter. You review a list of stored observations and summaries and decide which ones are LOW VALUE and should be deleted.
+var CLEANUP_SYSTEM_PROMPT = `You are an extremely aggressive memory quality filter. Your job is to DELETE everything that won't help a developer in a FUTURE session. Only KEEP observations that contain genuinely actionable technical knowledge.
 
-Low-value items include:
-- Meta/tooling noise: "Task X updated", "Tool search performed", "Plan mode entered"
-- Empty or trivial: "Nothing was done", "No findings", sessions with no real work
-- Redundant: near-duplicate entries that repeat the same information
-- Generic: observations that contain no specific or actionable information
+DELETE (the vast majority of items should be deleted):
+- "X was added/created/updated/modified" \u2014 knowing a file was edited is useless, the code itself is the source of truth
+- "Build succeeded/failed" \u2014 ephemeral build status
+- "Task/plan created/updated/completed" \u2014 meta-tooling noise
+- "Tool search performed", "Dependencies found", "File structure explored" \u2014 discovery that leads nowhere specific
+- "Plugin installed/uninstalled", "Worker started/restarted" \u2014 operational noise
+- Self-referential observations about the memory plugin itself being developed (unless they contain a real gotcha)
+- Summaries of sessions where nothing meaningful was accomplished
+- Anything where the title alone tells you everything and there's no deeper insight
+- "X function/component/route was implemented" \u2014 the code exists, no need to remember it was created
+- Redundant entries that repeat information from other items
+- CSS/style changes, import changes, config tweaks \u2014 trivial mechanical edits
 
-For each item, output KEEP or DELETE with a brief reason.
+KEEP (only if they contain specific technical knowledge you can't easily re-derive):
+- Bugs found with root cause analysis ("X broke because Y")
+- Non-obvious gotchas and workarounds ("matcher must be * because resume sessions are missed")
+- Architecture decisions with rationale ("chose Hono over Express because ESM compatibility")
+- API behaviors or quirks discovered ("Agent SDK doesn't stream tokens despite includePartialMessages")
+- Integration issues between systems
+- Performance findings with specifics
+
+When in doubt, DELETE. A smaller, high-signal context is far more valuable than a large noisy one.
 
 Output format (one line per item, in order):
 <decisions>
 <item id="ID">KEEP|DELETE: reason</item>
-</decisions>
-
-Be aggressive about deleting noise. When in doubt about whether something is useful development context, KEEP it. But pure meta-noise should always be DELETED.`;
+</decisions>`;
 function parseCleanupResults(text, items) {
   const results = [];
   const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
@@ -3787,17 +3820,8 @@ app.post("/api/observations", async (c) => {
     const cleanInput = stripPrivateTags(tool_input || "");
     const cleanResponse = stripPrivateTags(tool_response || "");
     const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
-    if (!parsed) {
-      const fallback = {
-        type: "raw",
-        title: `${tool_name} usage`,
-        facts: [],
-        narrative: null,
-        files_read: [],
-        files_modified: []
-      };
-      const result2 = storeObservation(session.id, session.project, fallback, contentSessionId);
-      return c.json({ ok: true, observationId: result2.id, raw: true });
+    if (!parsed || parsed.type === "skip") {
+      return c.json({ ok: true, skipped: true });
     }
     const result = storeObservation(session.id, session.project, parsed, contentSessionId);
     if (!result.deduplicated) {

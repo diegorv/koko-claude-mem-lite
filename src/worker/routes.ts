@@ -68,17 +68,8 @@ app.post('/api/observations', async (c) => {
 
     const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
 
-    if (!parsed) {
-      const fallback: ObservationInput = {
-        type: 'raw',
-        title: `${tool_name} usage`,
-        facts: [],
-        narrative: null,
-        files_read: [],
-        files_modified: [],
-      };
-      const result = storeObservation(session.id, session.project, fallback, contentSessionId);
-      return c.json({ ok: true, observationId: result.id, raw: true });
+    if (!parsed || parsed.type === 'skip') {
+      return c.json({ ok: true, skipped: true });
     }
 
     const result = storeObservation(session.id, session.project, parsed, contentSessionId);
