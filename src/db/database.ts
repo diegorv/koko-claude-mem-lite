@@ -91,23 +91,41 @@ CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
 END;
 `;
 
+// Incremental migrations keyed by target version number.
+// Each function runs when upgrading FROM (version - 1) TO that version.
+const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+  // Example for future use:
+  // 3: (db) => { db.exec('ALTER TABLE observations ADD COLUMN embedding_model TEXT'); },
+};
+
 function initializeSchema(database: Database.Database): void {
   database.pragma('journal_mode = WAL');
   database.pragma('foreign_keys = ON');
   database.pragma('cache_size = 10000');
 
-  const versionRow = (() => {
-    try {
-      return database.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined;
-    } catch {
-      return undefined;
-    }
-  })();
-
-  if (!versionRow || versionRow.version < SCHEMA_VERSION) {
-    database.exec(SCHEMA_SQL);
-    database.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
+  let currentVersion = 0;
+  try {
+    const row = database.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined;
+    currentVersion = row?.version || 0;
+  } catch {
+    // Table doesn't exist yet — fresh install
   }
+
+  if (currentVersion < 1) {
+    // Fresh install: run full schema
+    database.exec(SCHEMA_SQL);
+    currentVersion = SCHEMA_VERSION;
+  }
+
+  // Run incremental migrations
+  for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
+    const migrate = MIGRATIONS[v];
+    if (migrate) {
+      migrate(database);
+    }
+  }
+
+  database.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
 }
 
 function tryLoadSqliteVec(database: Database.Database): void {
