@@ -268,7 +268,8 @@ export async function reviewForCleanup(items: CleanupItem[]): Promise<CleanupRes
 
 function parseCleanupResults(text: string, items: CleanupItem[]): CleanupResult[] {
   const results: CleanupResult[] = [];
-  const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  // Match both "id=123" and "id=observation#123" or "id=summary#123"
+  const itemRegex = /<item id="(?:(?:observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
   let match;
   while ((match = itemRegex.exec(text)) !== null) {
     const id = parseInt(match[1]);
@@ -285,109 +286,3 @@ function parseCleanupResults(text: string, items: CleanupItem[]): CleanupResult[
   return results;
 }
 
-/**
- * Streaming cleanup: yields partial results as the AI generates them.
- * Uses includePartialMessages to get token-level streaming from the Agent SDK.
- */
-export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenerator<{ type: 'result' | 'done'; data: any }> {
-  if (items.length === 0) {
-    yield { type: 'done', data: { results: [], totalReviewed: 0 } };
-    return;
-  }
-
-  const itemList = items.map(i =>
-    `[${i.type}#${i.id}] ${i.text}`
-  ).join('\n\n');
-
-  console.log(`[cleanup] Starting streaming review of ${items.length} items`);
-
-  try {
-    const conversation = query({
-      prompt: itemList,
-      options: {
-        model: 'claude-sonnet-4-6',
-        systemPrompt: CLEANUP_SYSTEM_PROMPT,
-        maxTurns: 1,
-        tools: [],
-        disallowedTools: ['*'],
-        includePartialMessages: true,
-      },
-    });
-
-    let fullText = '';
-    let lastParsedCount = 0;
-    let messageCount = 0;
-
-    for await (const message of conversation) {
-      messageCount++;
-      const msgType = (message as any).type;
-      const msgSubtype = (message as any).subtype;
-
-      // Log every message type we see (first 20 only to avoid spam)
-      if (messageCount <= 20) {
-        console.log(`[cleanup] Message #${messageCount}: type=${msgType} subtype=${msgSubtype}`);
-      }
-
-      // Token-level streaming events
-      if (msgType === 'stream_event') {
-        const event = (message as any).event;
-        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-          fullText += event.delta.text;
-          const partialResults = parseCleanupResults(fullText, items);
-          if (partialResults.length > lastParsedCount) {
-            for (let i = lastParsedCount; i < partialResults.length; i++) {
-              console.log(`[cleanup] Yielding result: ${partialResults[i].action} #${partialResults[i].id}`);
-              yield { type: 'result', data: partialResults[i] };
-            }
-            lastParsedCount = partialResults.length;
-          }
-        }
-      }
-
-      // Also check for assistant messages with content (non-streaming fallback)
-      if (msgType === 'assistant' && (message as any).message?.content) {
-        for (const block of (message as any).message.content) {
-          if (block.type === 'text' && block.text) {
-            console.log(`[cleanup] Got assistant text block (${block.text.length} chars)`);
-            fullText = block.text;
-            const partialResults = parseCleanupResults(fullText, items);
-            if (partialResults.length > lastParsedCount) {
-              for (let i = lastParsedCount; i < partialResults.length; i++) {
-                console.log(`[cleanup] Yielding result (from assistant): ${partialResults[i].action} #${partialResults[i].id}`);
-                yield { type: 'result', data: partialResults[i] };
-              }
-              lastParsedCount = partialResults.length;
-            }
-          }
-        }
-      }
-
-      // Final result
-      if (msgType === 'result') {
-        if (msgSubtype === 'success') {
-          fullText = (message as any).result || fullText;
-          console.log(`[cleanup] Got final result (${fullText.length} chars)`);
-        } else {
-          console.error(`[cleanup] Result with subtype=${msgSubtype}:`, (message as any).error || 'unknown error');
-        }
-      }
-    }
-
-    console.log(`[cleanup] Stream ended after ${messageCount} messages, fullText=${fullText.length} chars`);
-
-    // Final parse
-    const finalResults = parseCleanupResults(fullText, items);
-    console.log(`[cleanup] Final parse: ${finalResults.length} results from ${items.length} items`);
-
-    if (finalResults.length > lastParsedCount) {
-      for (let i = lastParsedCount; i < finalResults.length; i++) {
-        yield { type: 'result', data: finalResults[i] };
-      }
-    }
-
-    yield { type: 'done', data: { results: finalResults, totalReviewed: items.length } };
-  } catch (error) {
-    console.error('[cleanup] Streaming cleanup failed:', error);
-    yield { type: 'done', data: { results: [], error: String(error) } };
-  }
-}

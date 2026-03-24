@@ -10,7 +10,7 @@ import {
 } from '../db/queries.js';
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext, generateContextDetailed } from '../context/generator.js';
-import { extractObservation, generateSummary, reviewForCleanupStream, type CleanupItem } from './summarizer.js';
+import { extractObservation, generateSummary, reviewForCleanup, type CleanupItem } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
@@ -475,7 +475,7 @@ app.post('/api/cleanup/review', async (c) => {
       items.push({ id: o.id, type: 'observation', text: `[${o.type}] ${parts.join(' - ')}` });
     }
 
-    // SSE: send items list immediately, then stream results as AI generates them
+    // SSE: send items immediately as pending, then AI results when ready
     return new Response(
       new ReadableStream({
         async start(controller) {
@@ -484,15 +484,20 @@ app.post('/api/cleanup/review', async (c) => {
             controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
           };
 
-          // Immediately send the items being reviewed so UI can show them as "pending"
+          // Immediately send items so UI shows them as "pending"
           send('items', { items: items.map(i => ({ id: i.id, type: i.type, text: i.text })) });
 
           try {
-            for await (const chunk of reviewForCleanupStream(items)) {
-              send(chunk.type, chunk.data);
+            const results = await reviewForCleanup(items);
+            // Send each result individually with tiny delay for animation
+            for (const r of results) {
+              send('result', r);
+              await new Promise(resolve => setTimeout(resolve, 30));
             }
+            send('done', { results, totalReviewed: items.length });
           } catch (err) {
-            send('done', { results: [], error: 'Cleanup failed' });
+            console.error('[cleanup] Failed:', err);
+            send('done', { results: [], error: String(err) });
           }
 
           controller.close();

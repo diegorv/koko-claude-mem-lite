@@ -3641,9 +3641,18 @@ Output format (one line per item, in order):
 <decisions>
 <item id="ID">KEEP|DELETE: reason</item>
 </decisions>`;
+async function reviewForCleanup(items) {
+  if (items.length === 0) return [];
+  const itemList = items.map(
+    (i) => `[${i.type}#${i.id}] ${i.text}`
+  ).join("\n\n");
+  const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
+  if (!text) return [];
+  return parseCleanupResults(text, items);
+}
 function parseCleanupResults(text, items) {
   const results = [];
-  const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  const itemRegex = /<item id="(?:(?:observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
   let match2;
   while ((match2 = itemRegex.exec(text)) !== null) {
     const id = parseInt(match2[1]);
@@ -3658,90 +3667,6 @@ function parseCleanupResults(text, items) {
     }
   }
   return results;
-}
-async function* reviewForCleanupStream(items) {
-  if (items.length === 0) {
-    yield { type: "done", data: { results: [], totalReviewed: 0 } };
-    return;
-  }
-  const itemList = items.map(
-    (i) => `[${i.type}#${i.id}] ${i.text}`
-  ).join("\n\n");
-  console.log(`[cleanup] Starting streaming review of ${items.length} items`);
-  try {
-    const conversation = query({
-      prompt: itemList,
-      options: {
-        model: "claude-sonnet-4-6",
-        systemPrompt: CLEANUP_SYSTEM_PROMPT,
-        maxTurns: 1,
-        tools: [],
-        disallowedTools: ["*"],
-        includePartialMessages: true
-      }
-    });
-    let fullText = "";
-    let lastParsedCount = 0;
-    let messageCount = 0;
-    for await (const message of conversation) {
-      messageCount++;
-      const msgType = message.type;
-      const msgSubtype = message.subtype;
-      if (messageCount <= 20) {
-        console.log(`[cleanup] Message #${messageCount}: type=${msgType} subtype=${msgSubtype}`);
-      }
-      if (msgType === "stream_event") {
-        const event = message.event;
-        if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
-          fullText += event.delta.text;
-          const partialResults = parseCleanupResults(fullText, items);
-          if (partialResults.length > lastParsedCount) {
-            for (let i = lastParsedCount; i < partialResults.length; i++) {
-              console.log(`[cleanup] Yielding result: ${partialResults[i].action} #${partialResults[i].id}`);
-              yield { type: "result", data: partialResults[i] };
-            }
-            lastParsedCount = partialResults.length;
-          }
-        }
-      }
-      if (msgType === "assistant" && message.message?.content) {
-        for (const block of message.message.content) {
-          if (block.type === "text" && block.text) {
-            console.log(`[cleanup] Got assistant text block (${block.text.length} chars)`);
-            fullText = block.text;
-            const partialResults = parseCleanupResults(fullText, items);
-            if (partialResults.length > lastParsedCount) {
-              for (let i = lastParsedCount; i < partialResults.length; i++) {
-                console.log(`[cleanup] Yielding result (from assistant): ${partialResults[i].action} #${partialResults[i].id}`);
-                yield { type: "result", data: partialResults[i] };
-              }
-              lastParsedCount = partialResults.length;
-            }
-          }
-        }
-      }
-      if (msgType === "result") {
-        if (msgSubtype === "success") {
-          fullText = message.result || fullText;
-          console.log(`[cleanup] Got final result (${fullText.length} chars)`);
-        } else {
-          console.error(`[cleanup] Result with subtype=${msgSubtype}:`, message.error || "unknown error");
-        }
-      }
-    }
-    console.log(`[cleanup] Stream ended after ${messageCount} messages, fullText=${fullText.length} chars`);
-    const finalResults = parseCleanupResults(fullText, items);
-    console.log(`[cleanup] Final parse: ${finalResults.length} results from ${items.length} items`);
-    if (finalResults.length > lastParsedCount) {
-      for (let i = lastParsedCount; i < finalResults.length; i++) {
-        yield { type: "result", data: finalResults[i] };
-      }
-    }
-    yield { type: "done", data: { results: finalResults, totalReviewed: items.length } };
-  } catch (error) {
-    console.error("[cleanup] Streaming cleanup failed:", error);
-    yield { type: "done", data: { results: [], error: String(error) } };
-  }
 }
 
 // src/utils/privacy.ts
@@ -4205,11 +4130,15 @@ data: ${JSON.stringify(data)}
           };
           send("items", { items: items.map((i) => ({ id: i.id, type: i.type, text: i.text })) });
           try {
-            for await (const chunk of reviewForCleanupStream(items)) {
-              send(chunk.type, chunk.data);
+            const results = await reviewForCleanup(items);
+            for (const r of results) {
+              send("result", r);
+              await new Promise((resolve) => setTimeout(resolve, 30));
             }
+            send("done", { results, totalReviewed: items.length });
           } catch (err) {
-            send("done", { results: [], error: "Cleanup failed" });
+            console.error("[cleanup] Failed:", err);
+            send("done", { results: [], error: String(err) });
           }
           controller.close();
         }
