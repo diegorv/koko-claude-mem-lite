@@ -5,6 +5,7 @@
 
 import type Database from 'better-sqlite3';
 import { getSetting } from '../utils/settings.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * Generate embedding for text via Ollama API.
@@ -40,7 +41,7 @@ const EXPECTED_EMBEDDING_DIM = 1024;
 
 export function storeEmbedding(db: Database.Database, observationId: number, embedding: Float32Array): boolean {
   if (embedding.length !== EXPECTED_EMBEDDING_DIM) {
-    console.error(`[embeddings] Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
+    logger.error('embeddings', `Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
     return false;
   }
   try {
@@ -49,7 +50,7 @@ export function storeEmbedding(db: Database.Database, observationId: number, emb
     ).run(observationId, Buffer.from(embedding.buffer));
     return true;
   } catch (error) {
-    console.error('[embeddings] Failed to store embedding:', error);
+    logger.error('embeddings', 'Failed to store embedding', error);
     return false;
   }
 }
@@ -79,7 +80,7 @@ export async function searchSemantic(
       distance: r.distance,
     }));
   } catch (error) {
-    console.error('[embeddings] Semantic search failed:', error);
+    logger.error('embeddings', 'Semantic search failed', error);
     return [];
   }
 }

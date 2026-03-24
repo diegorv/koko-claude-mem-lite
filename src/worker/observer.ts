@@ -11,6 +11,7 @@ import { enqueuePending, claimNextPending, deletePending, getPendingCount, force
 import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
 import { embedObservation } from '../embeddings/embeddings.js';
 import { getDb } from '../db/database.js';
+import { logger } from '../utils/logger.js';
 
 // --- Prompts (adapted from claude-mem) ---
 
@@ -158,7 +159,7 @@ class DurableQueue {
       try {
         msg = claimNextPending(this.contentSessionId);
       } catch (err) {
-        console.error('[queue] Error claiming message, backing off:', err);
+        logger.error('queue', 'Error claiming message, backing off', err);
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
@@ -315,7 +316,7 @@ export class ObserverSession {
       const queryArgs: any = { prompt: messageGenerator, options: queryOptions };
       if (this.memorySessionId) {
         queryArgs.resume = this.memorySessionId;
-        console.log(`[observer] Resuming session ${this.contentSessionId} with memorySessionId`);
+        logger.info('observer', `Resuming session ${this.contentSessionId} with memorySessionId`);
       }
 
       const conversation = query(queryArgs);
@@ -326,7 +327,7 @@ export class ObserverSession {
       let lastMessageTime = Date.now();
       const idleChecker = setInterval(() => {
         if (Date.now() - lastMessageTime > QUERY_IDLE_TIMEOUT_MS) {
-          console.warn(`[observer] SDK query idle timeout for ${this.contentSessionId}, aborting`);
+          logger.warn('observer', `SDK query idle timeout for ${this.contentSessionId}, aborting`);
           this.abortController.abort();
           if (this.conversation) {
             try { this.conversation.close(); } catch {}
@@ -345,7 +346,7 @@ export class ObserverSession {
             if (sessionId) {
               this.memorySessionId = sessionId;
               setMemorySessionId(this.contentSessionId, sessionId);
-              console.log(`[observer] Captured memorySessionId for ${this.contentSessionId}`);
+              logger.info('observer', `Captured memorySessionId for ${this.contentSessionId}`);
             }
           }
 
@@ -375,17 +376,17 @@ export class ObserverSession {
         this.conversation = null;
       }
     } catch (error) {
-      console.error('[observer] Conversation error:', error);
+      logger.error('observer', 'Conversation error', error);
     } finally {
       if (currentPendingMsg) {
         this.resolveAndCleanup(currentPendingMsg, '');
       }
-      console.log(`[observer] Conversation ended for ${this.contentSessionId}`);
+      logger.info('observer', `Conversation ended for ${this.contentSessionId}`);
 
       // Auto-restart if pending messages remain
       const remainingCount = getPendingCount(this.contentSessionId);
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
-        console.log(`[observer] ${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
+        logger.info('observer', `${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
         forceUnstickAll(this.contentSessionId);
 
         // Create replacement BEFORE destroying old session to avoid
@@ -410,7 +411,7 @@ export class ObserverSession {
         this.pendingResults.clear();
       } else {
         if (remainingCount > 0) {
-          console.warn(`[observer] ${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
+          logger.warn('observer', `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
         }
         this.destroy();
       }
@@ -429,10 +430,10 @@ export class ObserverSession {
             deletePending(msg.id);
             if (!result.deduplicated) {
               embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
-                .catch(err => console.error('[observer] embedding failed:', err));
+                .catch(err => logger.error('observer', 'embedding failed', err));
             }
           } catch (err) {
-            console.error('[observer] Failed to store observation:', err);
+            logger.error('observer', 'Failed to store observation', err);
             // Don't delete pending — will be retried on next restart
             return;
           }
@@ -458,7 +459,7 @@ export class ObserverSession {
             // Delete from durable store only AFTER successful storage
             deletePending(msg.id);
           } catch (err) {
-            console.error('[observer] Failed to store summary:', err);
+            logger.error('observer', 'Failed to store summary', err);
             // Don't delete pending — will be retried on next restart
             return;
           }
@@ -500,14 +501,14 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
   if (memorySessionId) {
     if (hasPending) {
       const unstuck = forceUnstickAll(contentSessionId);
-      if (unstuck > 0) console.log(`[observer] Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+      if (unstuck > 0) logger.info('observer', `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
     }
-    console.log(`[observer] Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? 'has' : 'no'} pending)`);
+    logger.info('observer', `Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? 'has' : 'no'} pending)`);
   }
 
   session = new ObserverSession(contentSessionId, project, userPrompt, memorySessionId);
   activeSessions.set(contentSessionId, session);
-  console.log(`[observer] Created session for ${contentSessionId} (project: ${project})`);
+  logger.info('observer', `Created session for ${contentSessionId} (project: ${project})`);
   return session;
 }
 
@@ -525,7 +526,7 @@ export function destroyObserver(contentSessionId: string): void {
   if (session) {
     session.destroy();
     activeSessions.delete(contentSessionId);
-    console.log(`[observer] Destroyed session for ${contentSessionId}`);
+    logger.info('observer', `Destroyed session for ${contentSessionId}`);
   }
 }
 

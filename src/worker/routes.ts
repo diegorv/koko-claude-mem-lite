@@ -15,6 +15,7 @@ import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
 import { getDb, isDbReady } from '../db/database.js';
+import { logger } from '../utils/logger.js';
 
 export const app = new Hono();
 
@@ -44,7 +45,7 @@ app.get('/api/context', (c) => {
     const context = generateContext(project);
     return c.json({ context });
   } catch (error) {
-    console.error('[routes] /api/context error:', error);
+    logger.error('routes', '/api/context error', error);
     return c.json({ error: 'Failed to generate context' }, 500);
   }
 });
@@ -67,7 +68,7 @@ app.post('/api/sessions', async (c) => {
 
     return c.json({ sessionId: session.id });
   } catch (error) {
-    console.error('[routes] /api/sessions error:', error);
+    logger.error('routes', '/api/sessions error', error);
     return c.json({ error: 'Failed to create session' }, 500);
   }
 });
@@ -91,7 +92,7 @@ app.post('/api/observations', async (c) => {
     if (observer) {
       // Fire-and-forget: pushObservation enqueues to DurableQueue, SDK processes async
       observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd).catch(err => {
-        console.error('[routes] Observer pushObservation error:', err);
+        logger.error('routes', 'Observer pushObservation error', err);
       });
       return c.json({ ok: true, queued: true });
     }
@@ -107,12 +108,12 @@ app.post('/api/observations', async (c) => {
 
     if (!result.deduplicated) {
       embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
-        .catch(err => console.error('[routes] embedding failed:', err));
+        .catch(err => logger.error('routes', 'embedding failed', err));
     }
 
     return c.json({ ok: true, observationId: result.id, deduplicated: result.deduplicated });
   } catch (error) {
-    console.error('[routes] /api/observations error:', error);
+    logger.error('routes', '/api/observations error', error);
     return c.json({ error: 'Failed to store observation' }, 500);
   }
 });
@@ -134,7 +135,7 @@ app.post('/api/summarize', async (c) => {
     const observer = getObserver(contentSessionId);
     if (observer) {
       observer.pushSummary(last_assistant_message).catch(err => {
-        console.error('[routes] Observer pushSummary error:', err);
+        logger.error('routes', 'Observer pushSummary error', err);
       });
       return c.json({ ok: true, queued: true });
     }
@@ -155,7 +156,7 @@ app.post('/api/summarize', async (c) => {
     storeSummary(session.id, session.project, summary);
     return c.json({ ok: true });
   } catch (error) {
-    console.error('[routes] /api/summarize error:', error);
+    logger.error('routes', '/api/summarize error', error);
     return c.json({ error: 'Failed to generate summary' }, 500);
   }
 });
@@ -169,7 +170,7 @@ app.post('/api/sessions/complete', async (c) => {
     destroyObserver(contentSessionId);
     return c.json({ ok: true });
   } catch (error) {
-    console.error('[routes] /api/sessions/complete error:', error);
+    logger.error('routes', '/api/sessions/complete error', error);
     return c.json({ error: 'Failed to complete session' }, 500);
   }
 });
@@ -207,7 +208,7 @@ app.get('/api/dashboard/sessions', (c) => {
 
     return c.json({ sessions, total: total.count });
   } catch (error) {
-    console.error('[routes] /api/dashboard/sessions error:', error);
+    logger.error('routes', '/api/dashboard/sessions error', error);
     return c.json({ error: 'Failed to list sessions' }, 500);
   }
 });
@@ -221,7 +222,7 @@ app.get('/api/dashboard/sessions/:sessionId/observations', (c) => {
     ).all(sessionId);
     return c.json({ observations });
   } catch (error) {
-    console.error('[routes] /api/dashboard/observations error:', error);
+    logger.error('routes', '/api/dashboard/observations error', error);
     return c.json({ error: 'Failed to list observations' }, 500);
   }
 });
@@ -238,7 +239,7 @@ app.get('/api/dashboard/projects', (c) => {
     `).all();
     return c.json({ projects });
   } catch (error) {
-    console.error('[routes] /api/dashboard/projects error:', error);
+    logger.error('routes', '/api/dashboard/projects error', error);
     return c.json({ error: 'Failed to list projects' }, 500);
   }
 });
@@ -275,7 +276,7 @@ app.get('/api/dashboard/stats', (c) => {
       uptime: Math.floor(process.uptime()),
     });
   } catch (error) {
-    console.error('[routes] /api/dashboard/stats error:', error);
+    logger.error('routes', '/api/dashboard/stats error', error);
     return c.json({ error: 'Failed to get stats' }, 500);
   }
 });
@@ -333,7 +334,7 @@ app.get('/api/dashboard/feed', (c) => {
 
     return c.json({ feed });
   } catch (error) {
-    console.error('[routes] /api/dashboard/feed error:', error);
+    logger.error('routes', '/api/dashboard/feed error', error);
     return c.json({ error: 'Failed to get feed' }, 500);
   }
 });
@@ -358,7 +359,7 @@ app.get('/api/search/index', (c) => {
     const formatted = formatSearchIndex(results);
     return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {
-    console.error('[routes] /api/search/index error:', error);
+    logger.error('routes', '/api/search/index error', error);
     return c.json({ error: 'Search failed' }, 500);
   }
 });
@@ -378,7 +379,7 @@ app.get('/api/timeline', (c) => {
     const formatted = formatTimeline(before, anchor, after);
     return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {
-    console.error('[routes] /api/timeline error:', error);
+    logger.error('routes', '/api/timeline error', error);
     return c.json({ error: 'Timeline failed' }, 500);
   }
 });
@@ -397,7 +398,7 @@ app.post('/api/observations/batch', async (c) => {
     const formatted = formatObservationsFull(observations);
     return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {
-    console.error('[routes] /api/observations/batch error:', error);
+    logger.error('routes', '/api/observations/batch error', error);
     return c.json({ error: 'Batch fetch failed' }, 500);
   }
 });
@@ -427,7 +428,7 @@ app.get('/api/search', async (c) => {
     const results = searchObservationsFts(q, project, limit);
     return c.json({ results, mode: 'fts' });
   } catch (error) {
-    console.error('[routes] /api/search error:', error);
+    logger.error('routes', '/api/search error', error);
     return c.json({ error: 'Search failed' }, 500);
   }
 });
@@ -442,7 +443,7 @@ app.delete('/api/observations/:id', (c) => {
     if (!deleted) return c.json({ error: 'Observation not found' }, 404);
     return c.json({ ok: true });
   } catch (error) {
-    console.error('[routes] DELETE /api/observations error:', error);
+    logger.error('routes', 'DELETE /api/observations error', error);
     return c.json({ error: 'Failed to delete observation' }, 500);
   }
 });
@@ -455,7 +456,7 @@ app.delete('/api/summaries/:id', (c) => {
     if (!deleted) return c.json({ error: 'Summary not found' }, 404);
     return c.json({ ok: true });
   } catch (error) {
-    console.error('[routes] DELETE /api/summaries error:', error);
+    logger.error('routes', 'DELETE /api/summaries error', error);
     return c.json({ error: 'Failed to delete summary' }, 500);
   }
 });
@@ -468,7 +469,7 @@ app.delete('/api/sessions/:id', (c) => {
     if (!deleted) return c.json({ error: 'Session not found' }, 404);
     return c.json({ ok: true });
   } catch (error) {
-    console.error('[routes] DELETE /api/sessions error:', error);
+    logger.error('routes', 'DELETE /api/sessions error', error);
     return c.json({ error: 'Failed to delete session' }, 500);
   }
 });
@@ -481,7 +482,7 @@ app.get('/api/dashboard/context-preview', (c) => {
     const breakdown = generateContextDetailed(project);
     return c.json(breakdown);
   } catch (error) {
-    console.error('[routes] /api/dashboard/context-preview error:', error);
+    logger.error('routes', '/api/dashboard/context-preview error', error);
     return c.json({ error: 'Failed to generate context preview' }, 500);
   }
 });
@@ -492,7 +493,7 @@ app.get('/api/settings', (c) => {
   try {
     return c.json(getAllSettings());
   } catch (error) {
-    console.error('[routes] GET /api/settings error:', error);
+    logger.error('routes', 'GET /api/settings error', error);
     return c.json({ error: 'Failed to get settings' }, 500);
   }
 });
@@ -503,7 +504,7 @@ app.put('/api/settings', async (c) => {
     const updated = updateSettings(body);
     return c.json(updated);
   } catch (error) {
-    console.error('[routes] PUT /api/settings error:', error);
+    logger.error('routes', 'PUT /api/settings error', error);
     return c.json({ error: 'Failed to update settings' }, 500);
   }
 });
@@ -566,7 +567,7 @@ app.post('/api/cleanup/review', async (c) => {
             }
             send('done', { results, totalReviewed: items.length });
           } catch (err) {
-            console.error('[cleanup] Failed:', err);
+            logger.error('cleanup', 'Review failed', err);
             send('done', { results: [], error: String(err) });
           }
 
@@ -582,7 +583,7 @@ app.post('/api/cleanup/review', async (c) => {
       }
     );
   } catch (error) {
-    console.error('[routes] /api/cleanup/review error:', error);
+    logger.error('routes', '/api/cleanup/review error', error);
     return c.json({ error: 'Cleanup review failed' }, 500);
   }
 });
@@ -603,7 +604,7 @@ app.post('/api/cleanup/apply', async (c) => {
 
     return c.json({ ok: true, deleted });
   } catch (error) {
-    console.error('[routes] /api/cleanup/apply error:', error);
+    logger.error('routes', '/api/cleanup/apply error', error);
     return c.json({ error: 'Cleanup apply failed' }, 500);
   }
 });

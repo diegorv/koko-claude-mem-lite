@@ -2875,6 +2875,43 @@ function getPidPath() {
 function getSettingsPath() {
   return join2(getDataDir(), "settings.json");
 }
+function getLogPath() {
+  return join2(getDataDir(), "worker.log");
+}
+
+// src/utils/logger.ts
+import { appendFileSync } from "fs";
+var logPath = null;
+function getPath2() {
+  if (!logPath) logPath = getLogPath();
+  return logPath;
+}
+function timestamp() {
+  const d = /* @__PURE__ */ new Date();
+  const pad = (n, len = 2) => String(n).padStart(len, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+function write(level, component, message, data) {
+  const parts = [`[${timestamp()}]`, `[${level.padEnd(5)}]`, `[${component}]`, message];
+  if (data !== void 0) {
+    try {
+      parts.push(typeof data === "string" ? data : JSON.stringify(data));
+    } catch {
+    }
+  }
+  const line = parts.join(" ") + "\n";
+  try {
+    appendFileSync(getPath2(), line);
+  } catch {
+    process.stderr.write(line);
+  }
+}
+var logger = {
+  debug: (component, message, data) => write("DEBUG", component, message, data),
+  info: (component, message, data) => write("INFO", component, message, data),
+  warn: (component, message, data) => write("WARN", component, message, data),
+  error: (component, message, data) => write("ERROR", component, message, data)
+};
 
 // src/db/database.ts
 var db = null;
@@ -3002,9 +3039,9 @@ function tryLoadSqliteVec(database) {
         embedding float[1024]
       )
     `);
-    console.log("[db] sqlite-vec loaded successfully");
+    logger.info("db", "sqlite-vec loaded successfully");
   } catch (err) {
-    console.log("[db] sqlite-vec not available \u2014 semantic search disabled, FTS5 still works");
+    logger.info("db", "sqlite-vec not available \u2014 semantic search disabled, FTS5 still works");
   }
 }
 function getDb() {
@@ -3637,7 +3674,7 @@ async function runQuery(systemPrompt, userMessage) {
     }
     return resultText || null;
   } catch (error) {
-    console.error("[summarizer] Agent SDK query failed:", error);
+    logger.error("summarizer", "Agent SDK query failed", error);
     return null;
   }
 }
@@ -3779,7 +3816,7 @@ async function generateEmbedding(text) {
 var EXPECTED_EMBEDDING_DIM = 1024;
 function storeEmbedding(db2, observationId, embedding) {
   if (embedding.length !== EXPECTED_EMBEDDING_DIM) {
-    console.error(`[embeddings] Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
+    logger.error("embeddings", `Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
     return false;
   }
   try {
@@ -3788,7 +3825,7 @@ function storeEmbedding(db2, observationId, embedding) {
     ).run(observationId, Buffer.from(embedding.buffer));
     return true;
   } catch (error) {
-    console.error("[embeddings] Failed to store embedding:", error);
+    logger.error("embeddings", "Failed to store embedding", error);
     return false;
   }
 }
@@ -3808,7 +3845,7 @@ async function searchSemantic(db2, query3, limit = 10) {
       distance: r.distance
     }));
   } catch (error) {
-    console.error("[embeddings] Semantic search failed:", error);
+    logger.error("embeddings", "Semantic search failed", error);
     return [];
   }
 }
@@ -3958,7 +3995,7 @@ var DurableQueue = class {
       try {
         msg = claimNextPending(this.contentSessionId);
       } catch (err) {
-        console.error("[queue] Error claiming message, backing off:", err);
+        logger.error("queue", "Error claiming message, backing off", err);
         await new Promise((resolve) => setTimeout(resolve, 1e3));
         continue;
       }
@@ -4004,6 +4041,8 @@ var ObserverSession = class _ObserverSession {
   memorySessionId;
   abortController = new AbortController();
   restartCount;
+  conversation = null;
+  lastActivityTime = Date.now();
   contentSessionId;
   project;
   constructor(contentSessionId, project, userPrompt, memorySessionId, restartCount = 0) {
@@ -4016,6 +4055,7 @@ var ObserverSession = class _ObserverSession {
   }
   async pushObservation(toolName, toolInput, toolResponse, cwd) {
     if (this.destroyed) return null;
+    this.lastActivityTime = Date.now();
     const prompt = buildObservationPrompt(toolName, toolInput, toolResponse, cwd);
     const pendingId = this.queue.push("observation", prompt);
     return new Promise((resolve) => {
@@ -4024,6 +4064,7 @@ var ObserverSession = class _ObserverSession {
   }
   async pushSummary(lastAssistantMessage) {
     if (this.destroyed) return null;
+    this.lastActivityTime = Date.now();
     const prompt = buildSummaryPrompt(lastAssistantMessage);
     const pendingId = this.queue.push("summary", prompt);
     return new Promise((resolve) => {
@@ -4035,6 +4076,13 @@ var ObserverSession = class _ObserverSession {
     this.destroyed = true;
     this.abortController.abort();
     this.queue.close();
+    if (this.conversation) {
+      try {
+        this.conversation.close();
+      } catch {
+      }
+      this.conversation = null;
+    }
     for (const [, pending] of this.pendingResults) {
       pending.resolve(null);
     }
@@ -4062,51 +4110,74 @@ var ObserverSession = class _ObserverSession {
         systemPrompt: SYSTEM_PROMPT,
         maxTurns: 0,
         tools: [],
-        disallowedTools: ["*"]
+        disallowedTools: ["*"],
+        abortController: this.abortController
       };
       const queryArgs = { prompt: messageGenerator, options: queryOptions };
       if (this.memorySessionId) {
         queryArgs.resume = this.memorySessionId;
-        console.log(`[observer] Resuming session ${this.contentSessionId} with memorySessionId`);
+        logger.info("observer", `Resuming session ${this.contentSessionId} with memorySessionId`);
       }
       const conversation = query2(queryArgs);
-      for await (const message of conversation) {
-        if (message.type === "assistant" && !this.memorySessionId) {
-          const sessionId = message.session_id || message.message?.session_id;
-          if (sessionId) {
-            this.memorySessionId = sessionId;
-            setMemorySessionId(this.contentSessionId, sessionId);
-            console.log(`[observer] Captured memorySessionId for ${this.contentSessionId}`);
+      this.conversation = conversation;
+      const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1e3;
+      let lastMessageTime = Date.now();
+      const idleChecker = setInterval(() => {
+        if (Date.now() - lastMessageTime > QUERY_IDLE_TIMEOUT_MS) {
+          logger.warn("observer", `SDK query idle timeout for ${this.contentSessionId}, aborting`);
+          this.abortController.abort();
+          if (this.conversation) {
+            try {
+              this.conversation.close();
+            } catch {
+            }
           }
         }
-        if (message.type === "assistant" && message.message?.content) {
-          let text = "";
-          for (const block of message.message.content) {
-            if (block.type === "text") text += block.text;
+      }, 3e4);
+      idleChecker.unref();
+      try {
+        for await (const message of conversation) {
+          lastMessageTime = Date.now();
+          if (message.type === "assistant" && !this.memorySessionId) {
+            const sessionId = message.session_id || message.message?.session_id;
+            if (sessionId) {
+              this.memorySessionId = sessionId;
+              setMemorySessionId(this.contentSessionId, sessionId);
+              logger.info("observer", `Captured memorySessionId for ${this.contentSessionId}`);
+            }
           }
-          if (currentPendingMsg && text) {
-            this.resolveAndCleanup(currentPendingMsg, text);
-            currentPendingMsg = null;
+          if (message.type === "assistant" && message.message?.content) {
+            let text = "";
+            for (const block of message.message.content) {
+              if (block.type === "text") text += block.text;
+            }
+            if (currentPendingMsg && text) {
+              this.resolveAndCleanup(currentPendingMsg, text);
+              currentPendingMsg = null;
+            }
+          }
+          if (message.type === "result" && message.subtype === "success") {
+            const text = message.result || "";
+            if (currentPendingMsg && text) {
+              this.resolveAndCleanup(currentPendingMsg, text);
+              currentPendingMsg = null;
+            }
           }
         }
-        if (message.type === "result" && message.subtype === "success") {
-          const text = message.result || "";
-          if (currentPendingMsg && text) {
-            this.resolveAndCleanup(currentPendingMsg, text);
-            currentPendingMsg = null;
-          }
-        }
+      } finally {
+        clearInterval(idleChecker);
+        this.conversation = null;
       }
     } catch (error) {
-      console.error("[observer] Conversation error:", error);
+      logger.error("observer", "Conversation error", error);
     } finally {
       if (currentPendingMsg) {
         this.resolveAndCleanup(currentPendingMsg, "");
       }
-      console.log(`[observer] Conversation ended for ${this.contentSessionId}`);
+      logger.info("observer", `Conversation ended for ${this.contentSessionId}`);
       const remainingCount = getPendingCount(this.contentSessionId);
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
-        console.log(`[observer] ${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
+        logger.info("observer", `${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
         forceUnstickAll(this.contentSessionId);
         const replacement = new _ObserverSession(
           this.contentSessionId,
@@ -4119,13 +4190,20 @@ var ObserverSession = class _ObserverSession {
         this.destroyed = true;
         this.abortController.abort();
         this.queue.close();
+        if (this.conversation) {
+          try {
+            this.conversation.close();
+          } catch {
+          }
+          this.conversation = null;
+        }
         for (const [, pending] of this.pendingResults) {
           pending.resolve(null);
         }
         this.pendingResults.clear();
       } else {
         if (remainingCount > 0) {
-          console.warn(`[observer] ${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
+          logger.warn("observer", `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
         }
         this.destroy();
       }
@@ -4141,10 +4219,10 @@ var ObserverSession = class _ObserverSession {
             const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
             deletePending(msg.id);
             if (!result.deduplicated) {
-              embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => console.error("[observer] embedding failed:", err));
+              embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("observer", "embedding failed", err));
             }
           } catch (err) {
-            console.error("[observer] Failed to store observation:", err);
+            logger.error("observer", "Failed to store observation", err);
             return;
           }
         } else {
@@ -4167,7 +4245,7 @@ var ObserverSession = class _ObserverSession {
             storeSummary(session.id, session.project, parsed);
             deletePending(msg.id);
           } catch (err) {
-            console.error("[observer] Failed to store summary:", err);
+            logger.error("observer", "Failed to store summary", err);
             return;
           }
         } else {
@@ -4200,13 +4278,13 @@ function getOrCreateObserver(contentSessionId, project, userPrompt) {
   if (memorySessionId) {
     if (hasPending) {
       const unstuck = forceUnstickAll(contentSessionId);
-      if (unstuck > 0) console.log(`[observer] Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+      if (unstuck > 0) logger.info("observer", `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
     }
-    console.log(`[observer] Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? "has" : "no"} pending)`);
+    logger.info("observer", `Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? "has" : "no"} pending)`);
   }
   session = new ObserverSession(contentSessionId, project, userPrompt, memorySessionId);
   activeSessions.set(contentSessionId, session);
-  console.log(`[observer] Created session for ${contentSessionId} (project: ${project})`);
+  logger.info("observer", `Created session for ${contentSessionId} (project: ${project})`);
   return session;
 }
 function getObserver(contentSessionId) {
@@ -4222,7 +4300,7 @@ function destroyObserver(contentSessionId) {
   if (session) {
     session.destroy();
     activeSessions.delete(contentSessionId);
-    console.log(`[observer] Destroyed session for ${contentSessionId}`);
+    logger.info("observer", `Destroyed session for ${contentSessionId}`);
   }
 }
 function destroyAllObservers() {
@@ -4230,6 +4308,14 @@ function destroyAllObservers() {
     session.destroy();
   }
   activeSessions.clear();
+}
+function getActiveSessionIds() {
+  return Array.from(activeSessions.keys());
+}
+function getSessionAge(contentSessionId) {
+  const session = activeSessions.get(contentSessionId);
+  if (!session) return Infinity;
+  return Date.now() - session.lastActivityTime;
 }
 
 // src/utils/privacy.ts
@@ -4261,7 +4347,7 @@ app.get("/api/context", (c) => {
     const context = generateContext(project);
     return c.json({ context });
   } catch (error) {
-    console.error("[routes] /api/context error:", error);
+    logger.error("routes", "/api/context error", error);
     return c.json({ error: "Failed to generate context" }, 500);
   }
 });
@@ -4277,7 +4363,7 @@ app.post("/api/sessions", async (c) => {
     getOrCreateObserver(contentSessionId, project || "unknown", cleanPrompt);
     return c.json({ sessionId: session.id });
   } catch (error) {
-    console.error("[routes] /api/sessions error:", error);
+    logger.error("routes", "/api/sessions error", error);
     return c.json({ error: "Failed to create session" }, 500);
   }
 });
@@ -4294,7 +4380,7 @@ app.post("/api/observations", async (c) => {
     const observer = getObserver(contentSessionId);
     if (observer) {
       observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd).catch((err) => {
-        console.error("[routes] Observer pushObservation error:", err);
+        logger.error("routes", "Observer pushObservation error", err);
       });
       return c.json({ ok: true, queued: true });
     }
@@ -4304,11 +4390,11 @@ app.post("/api/observations", async (c) => {
     }
     const result = storeObservation(session.id, session.project, parsed, contentSessionId);
     if (!result.deduplicated) {
-      embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => console.error("[routes] embedding failed:", err));
+      embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("routes", "embedding failed", err));
     }
     return c.json({ ok: true, observationId: result.id, deduplicated: result.deduplicated });
   } catch (error) {
-    console.error("[routes] /api/observations error:", error);
+    logger.error("routes", "/api/observations error", error);
     return c.json({ error: "Failed to store observation" }, 500);
   }
 });
@@ -4324,7 +4410,7 @@ app.post("/api/summarize", async (c) => {
     const observer = getObserver(contentSessionId);
     if (observer) {
       observer.pushSummary(last_assistant_message).catch((err) => {
-        console.error("[routes] Observer pushSummary error:", err);
+        logger.error("routes", "Observer pushSummary error", err);
       });
       return c.json({ ok: true, queued: true });
     }
@@ -4340,7 +4426,7 @@ app.post("/api/summarize", async (c) => {
     storeSummary(session.id, session.project, summary);
     return c.json({ ok: true });
   } catch (error) {
-    console.error("[routes] /api/summarize error:", error);
+    logger.error("routes", "/api/summarize error", error);
     return c.json({ error: "Failed to generate summary" }, 500);
   }
 });
@@ -4352,7 +4438,7 @@ app.post("/api/sessions/complete", async (c) => {
     destroyObserver(contentSessionId);
     return c.json({ ok: true });
   } catch (error) {
-    console.error("[routes] /api/sessions/complete error:", error);
+    logger.error("routes", "/api/sessions/complete error", error);
     return c.json({ error: "Failed to complete session" }, 500);
   }
 });
@@ -4383,7 +4469,7 @@ app.get("/api/dashboard/sessions", (c) => {
     const total = db2.prepare(`SELECT COUNT(*) as count FROM sessions ${project ? "WHERE project = ?" : ""}`).get(...project ? [project] : []);
     return c.json({ sessions, total: total.count });
   } catch (error) {
-    console.error("[routes] /api/dashboard/sessions error:", error);
+    logger.error("routes", "/api/dashboard/sessions error", error);
     return c.json({ error: "Failed to list sessions" }, 500);
   }
 });
@@ -4396,7 +4482,7 @@ app.get("/api/dashboard/sessions/:sessionId/observations", (c) => {
     ).all(sessionId);
     return c.json({ observations });
   } catch (error) {
-    console.error("[routes] /api/dashboard/observations error:", error);
+    logger.error("routes", "/api/dashboard/observations error", error);
     return c.json({ error: "Failed to list observations" }, 500);
   }
 });
@@ -4412,7 +4498,7 @@ app.get("/api/dashboard/projects", (c) => {
     `).all();
     return c.json({ projects });
   } catch (error) {
-    console.error("[routes] /api/dashboard/projects error:", error);
+    logger.error("routes", "/api/dashboard/projects error", error);
     return c.json({ error: "Failed to list projects" }, 500);
   }
 });
@@ -4445,7 +4531,7 @@ app.get("/api/dashboard/stats", (c) => {
       uptime: Math.floor(process.uptime())
     });
   } catch (error) {
-    console.error("[routes] /api/dashboard/stats error:", error);
+    logger.error("routes", "/api/dashboard/stats error", error);
     return c.json({ error: "Failed to get stats" }, 500);
   }
 });
@@ -4493,7 +4579,7 @@ app.get("/api/dashboard/feed", (c) => {
     const feed = [...obs, ...sums].sort((a, b) => b.created_at_epoch - a.created_at_epoch).slice(0, limit);
     return c.json({ feed });
   } catch (error) {
-    console.error("[routes] /api/dashboard/feed error:", error);
+    logger.error("routes", "/api/dashboard/feed error", error);
     return c.json({ error: "Failed to get feed" }, 500);
   }
 });
@@ -4513,7 +4599,7 @@ app.get("/api/search/index", (c) => {
     const formatted = formatSearchIndex(results);
     return c.json({ content: [{ type: "text", text: formatted }] });
   } catch (error) {
-    console.error("[routes] /api/search/index error:", error);
+    logger.error("routes", "/api/search/index error", error);
     return c.json({ error: "Search failed" }, 500);
   }
 });
@@ -4529,7 +4615,7 @@ app.get("/api/timeline", (c) => {
     const formatted = formatTimeline(before, anchor, after);
     return c.json({ content: [{ type: "text", text: formatted }] });
   } catch (error) {
-    console.error("[routes] /api/timeline error:", error);
+    logger.error("routes", "/api/timeline error", error);
     return c.json({ error: "Timeline failed" }, 500);
   }
 });
@@ -4546,7 +4632,7 @@ app.post("/api/observations/batch", async (c) => {
     const formatted = formatObservationsFull(observations);
     return c.json({ content: [{ type: "text", text: formatted }] });
   } catch (error) {
-    console.error("[routes] /api/observations/batch error:", error);
+    logger.error("routes", "/api/observations/batch error", error);
     return c.json({ error: "Batch fetch failed" }, 500);
   }
 });
@@ -4572,7 +4658,7 @@ app.get("/api/search", async (c) => {
     const results = searchObservationsFts(q, project, limit);
     return c.json({ results, mode: "fts" });
   } catch (error) {
-    console.error("[routes] /api/search error:", error);
+    logger.error("routes", "/api/search error", error);
     return c.json({ error: "Search failed" }, 500);
   }
 });
@@ -4584,7 +4670,7 @@ app.delete("/api/observations/:id", (c) => {
     if (!deleted) return c.json({ error: "Observation not found" }, 404);
     return c.json({ ok: true });
   } catch (error) {
-    console.error("[routes] DELETE /api/observations error:", error);
+    logger.error("routes", "DELETE /api/observations error", error);
     return c.json({ error: "Failed to delete observation" }, 500);
   }
 });
@@ -4596,7 +4682,7 @@ app.delete("/api/summaries/:id", (c) => {
     if (!deleted) return c.json({ error: "Summary not found" }, 404);
     return c.json({ ok: true });
   } catch (error) {
-    console.error("[routes] DELETE /api/summaries error:", error);
+    logger.error("routes", "DELETE /api/summaries error", error);
     return c.json({ error: "Failed to delete summary" }, 500);
   }
 });
@@ -4608,7 +4694,7 @@ app.delete("/api/sessions/:id", (c) => {
     if (!deleted) return c.json({ error: "Session not found" }, 404);
     return c.json({ ok: true });
   } catch (error) {
-    console.error("[routes] DELETE /api/sessions error:", error);
+    logger.error("routes", "DELETE /api/sessions error", error);
     return c.json({ error: "Failed to delete session" }, 500);
   }
 });
@@ -4618,7 +4704,7 @@ app.get("/api/dashboard/context-preview", (c) => {
     const breakdown = generateContextDetailed(project);
     return c.json(breakdown);
   } catch (error) {
-    console.error("[routes] /api/dashboard/context-preview error:", error);
+    logger.error("routes", "/api/dashboard/context-preview error", error);
     return c.json({ error: "Failed to generate context preview" }, 500);
   }
 });
@@ -4626,7 +4712,7 @@ app.get("/api/settings", (c) => {
   try {
     return c.json(getAllSettings());
   } catch (error) {
-    console.error("[routes] GET /api/settings error:", error);
+    logger.error("routes", "GET /api/settings error", error);
     return c.json({ error: "Failed to get settings" }, 500);
   }
 });
@@ -4636,9 +4722,21 @@ app.put("/api/settings", async (c) => {
     const updated = updateSettings(body);
     return c.json(updated);
   } catch (error) {
-    console.error("[routes] PUT /api/settings error:", error);
+    logger.error("routes", "PUT /api/settings error", error);
     return c.json({ error: "Failed to update settings" }, 500);
   }
+});
+app.get("/api/debug/sessions", (c) => {
+  const sessions = getActiveSessionIds().map((id) => ({
+    contentSessionId: id,
+    idleMs: Math.round(getSessionAge(id))
+  }));
+  return c.json({
+    activeSessions: sessions,
+    uptime: Math.floor(process.uptime()),
+    pid: process.pid,
+    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
+  });
 });
 app.post("/api/cleanup/review", async (c) => {
   try {
@@ -4674,7 +4772,7 @@ data: ${JSON.stringify(data)}
             }
             send("done", { results, totalReviewed: items.length });
           } catch (err) {
-            console.error("[cleanup] Failed:", err);
+            logger.error("cleanup", "Review failed", err);
             send("done", { results: [], error: String(err) });
           }
           controller.close();
@@ -4689,7 +4787,7 @@ data: ${JSON.stringify(data)}
       }
     );
   } catch (error) {
-    console.error("[routes] /api/cleanup/review error:", error);
+    logger.error("routes", "/api/cleanup/review error", error);
     return c.json({ error: "Cleanup review failed" }, 500);
   }
 });
@@ -4707,7 +4805,7 @@ app.post("/api/cleanup/apply", async (c) => {
     }
     return c.json({ ok: true, deleted });
   } catch (error) {
-    console.error("[routes] /api/cleanup/apply error:", error);
+    logger.error("routes", "/api/cleanup/apply error", error);
     return c.json({ error: "Cleanup apply failed" }, 500);
   }
 });
@@ -4735,15 +4833,45 @@ function removePid() {
   }
 }
 var shutdownInitiated = false;
+var STALE_SESSION_MS = 30 * 60 * 1e3;
+var reaperInterval = setInterval(() => {
+  try {
+    for (const id of getActiveSessionIds()) {
+      const age = getSessionAge(id);
+      if (age > STALE_SESSION_MS) {
+        logger.info("reaper", `Destroying stale session ${id} (idle: ${Math.round(age / 1e3)}s)`);
+        destroyObserver(id);
+      }
+    }
+  } catch (err) {
+    logger.error("reaper", "Error during cleanup", err);
+  }
+}, 6e4);
+reaperInterval.unref();
+var IDLE_SHUTDOWN_MS = 30 * 60 * 1e3;
+var lastApiActivity = Date.now();
+app.use("/api/*", async (c, next) => {
+  lastApiActivity = Date.now();
+  await next();
+});
+var idleShutdownInterval = setInterval(() => {
+  if (getActiveSessionIds().length === 0 && Date.now() - lastApiActivity > IDLE_SHUTDOWN_MS) {
+    logger.info("worker", "No active sessions and idle for 30min, shutting down");
+    shutdown();
+  }
+}, 6e4);
+idleShutdownInterval.unref();
 function shutdown() {
   if (shutdownInitiated) return;
   shutdownInitiated = true;
+  clearInterval(reaperInterval);
+  clearInterval(idleShutdownInterval);
   const forceTimer = setTimeout(() => {
-    console.error("[worker] Graceful shutdown timed out after 10s, force exiting");
+    logger.error("worker", "Graceful shutdown timed out after 10s, force exiting");
     process.exit(1);
   }, 1e4);
   forceTimer.unref();
-  console.log("[worker] Shutting down...");
+  logger.info("worker", "Shutting down...");
   destroyAllObservers();
   removePid();
   closeDb();
@@ -4768,7 +4896,7 @@ async function checkExistingWorker() {
     process.kill(oldPid, 0);
     const res = await fetch(`http://127.0.0.1:${oldPort}/api/health`, { signal: AbortSignal.timeout(2e3) });
     if (res.ok) {
-      console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
+      logger.info("worker", `Another worker already running (PID ${oldPid}). Exiting.`);
       return true;
     }
   } catch {
@@ -4781,5 +4909,5 @@ if (alreadyRunning) process.exit(0);
 writePid();
 getDb();
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
-  console.log(`[worker] Memory-lite worker running on http://127.0.0.1:${port}`);
+  logger.info("worker", `Memory-lite worker running on http://127.0.0.1:${port}`);
 });

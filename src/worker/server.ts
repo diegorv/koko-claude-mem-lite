@@ -8,6 +8,7 @@ import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
 import { closeDb, getDb } from '../db/database.js';
 import { destroyAllObservers, destroyObserver, getActiveSessionIds, getSessionAge } from './observer.js';
+import { logger } from '../utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -46,12 +47,12 @@ const reaperInterval = setInterval(() => {
     for (const id of getActiveSessionIds()) {
       const age = getSessionAge(id);
       if (age > STALE_SESSION_MS) {
-        console.log(`[reaper] Destroying stale session ${id} (idle: ${Math.round(age / 1000)}s)`);
+        logger.info('reaper', `Destroying stale session ${id} (idle: ${Math.round(age / 1000)}s)`);
         destroyObserver(id);
       }
     }
   } catch (err) {
-    console.error('[reaper] Error:', err);
+    logger.error('reaper', 'Error during cleanup', err);
   }
 }, 60_000);
 reaperInterval.unref();
@@ -65,7 +66,7 @@ app.use('/api/*', async (c, next) => {
 });
 const idleShutdownInterval = setInterval(() => {
   if (getActiveSessionIds().length === 0 && Date.now() - lastApiActivity > IDLE_SHUTDOWN_MS) {
-    console.log('[worker] No active sessions and idle for 30min, shutting down');
+    logger.info('worker', 'No active sessions and idle for 30min, shutting down');
     shutdown();
   }
 }, 60_000);
@@ -79,12 +80,12 @@ function shutdown(): void {
   clearInterval(idleShutdownInterval);
 
   const forceTimer = setTimeout(() => {
-    console.error('[worker] Graceful shutdown timed out after 10s, force exiting');
+    logger.error('worker', 'Graceful shutdown timed out after 10s, force exiting');
     process.exit(1);
   }, 10_000);
   forceTimer.unref();
 
-  console.log('[worker] Shutting down...');
+  logger.info('worker', 'Shutting down...');
   destroyAllObservers();
   removePid();
   closeDb();
@@ -114,7 +115,7 @@ async function checkExistingWorker(): Promise<boolean> {
     // Verify it's actually our worker via health check
     const res = await fetch(`http://127.0.0.1:${oldPort}/api/health`, { signal: AbortSignal.timeout(2000) });
     if (res.ok) {
-      console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
+      logger.info('worker', `Another worker already running (PID ${oldPid}). Exiting.`);
       return true;
     }
   } catch {
@@ -131,5 +132,5 @@ writePid();
 getDb(); // Eagerly initialize DB so /api/readiness becomes true before first request
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
-  console.log(`[worker] Memory-lite worker running on http://127.0.0.1:${port}`);
+  logger.info('worker', `Memory-lite worker running on http://127.0.0.1:${port}`);
 });

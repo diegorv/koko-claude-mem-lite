@@ -5,6 +5,7 @@
  */
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { logger } from '../utils/logger.js';
 
 // --- XML Parser ---
 
@@ -174,7 +175,7 @@ async function runQuery(systemPrompt: string, userMessage: string): Promise<stri
 
     return resultText || null;
   } catch (error) {
-    console.error('[summarizer] Agent SDK query failed:', error);
+    logger.error('summarizer', 'Agent SDK query failed', error);
     return null;
   }
 }

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { getLoadablePath } from 'sqlite-vec';
 import { getDbPath, getDataDir } from '../utils/paths.js';
+import { logger } from '../utils/logger.js';
 
 export type { Database };
 
@@ -144,9 +145,9 @@ function tryLoadSqliteVec(database: Database.Database): void {
         embedding float[1024]
       )
     `);
-    console.log('[db] sqlite-vec loaded successfully');
+    logger.info('db', 'sqlite-vec loaded successfully');
   } catch (err) {
-    console.log('[db] sqlite-vec not available — semantic search disabled, FTS5 still works');
+    logger.info('db', 'sqlite-vec not available — semantic search disabled, FTS5 still works');
   }
 }
 
