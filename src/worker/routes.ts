@@ -10,7 +10,7 @@ import {
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext, generateContextDetailed } from '../context/generator.js';
 import { extractObservation, generateSummary, reviewForCleanup, type CleanupItem } from './summarizer.js';
-import { getOrCreateObserver, getObserver, destroyObserver } from './observer.js';
+import { getOrCreateObserver, getObserver, destroyObserver, getActiveSessionIds, getSessionAge } from './observer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
@@ -506,6 +506,21 @@ app.put('/api/settings', async (c) => {
     console.error('[routes] PUT /api/settings error:', error);
     return c.json({ error: 'Failed to update settings' }, 500);
   }
+});
+
+// --- Debug ---
+
+app.get('/api/debug/sessions', (c) => {
+  const sessions = getActiveSessionIds().map(id => ({
+    contentSessionId: id,
+    idleMs: Math.round(getSessionAge(id)),
+  }));
+  return c.json({
+    activeSessions: sessions,
+    uptime: Math.floor(process.uptime()),
+    pid: process.pid,
+    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+  });
 });
 
 // --- AI Cleanup ---
