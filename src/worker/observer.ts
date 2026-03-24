@@ -157,15 +157,16 @@ class DurableQueue {
 
       // Wait for new message or timeout
       const gotMessage = await new Promise<boolean>((resolve) => {
+        const onMessage = () => {
+          clearTimeout(timer);
+          resolve(true);
+        };
         const timer = setTimeout(() => {
-          this.emitter.removeAllListeners('message');
+          this.emitter.removeListener('message', onMessage);
           resolve(false);
         }, IDLE_TIMEOUT_MS);
 
-        this.emitter.once('message', () => {
-          clearTimeout(timer);
-          resolve(true);
-        });
+        this.emitter.once('message', onMessage);
       });
 
       if (!gotMessage) {
