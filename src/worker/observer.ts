@@ -154,21 +154,25 @@ class DurableQueue {
   }
 
   async *[Symbol.asyncIterator](): AsyncGenerator<PendingMessage> {
+    let iterCount = 0;
     while (!this.closed && !this.signal?.aborted) {
+      iterCount++;
       let msg: PendingMessage | null = null;
       try {
         msg = claimNextPending(this.contentSessionId);
       } catch (err) {
-        logger.error('queue', 'Error claiming message, backing off', err);
+        logger.error('queue', `Error claiming message (iter=${iterCount}), backing off`, err);
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
 
       if (msg) {
+        logger.info('queue', `Claimed message id=${msg.id} kind=${msg.kind} (iter=${iterCount}) for ${this.contentSessionId}`);
         yield msg;
         continue;
       }
 
+      logger.info('queue', `No pending messages, waiting (iter=${iterCount}) for ${this.contentSessionId}`);
       // Wait for new message or timeout
       const gotMessage = await new Promise<boolean>((resolve) => {
         const onMessage = () => {
@@ -192,16 +196,23 @@ class DurableQueue {
       });
 
       if (!gotMessage) {
-        if (this.signal?.aborted) break;
+        if (this.signal?.aborted) {
+          logger.info('queue', `Aborted signal received (iter=${iterCount}) for ${this.contentSessionId}`);
+          break;
+        }
         // Final check: stuck messages may now be past STUCK_TIMEOUT_MS
+        logger.info('queue', `Idle timeout, final check (iter=${iterCount}) for ${this.contentSessionId}`);
         const recovered = claimNextPending(this.contentSessionId);
         if (recovered) {
+          logger.info('queue', `Recovered stuck message id=${recovered.id} (iter=${iterCount})`);
           yield recovered;
           continue;
         }
+        logger.info('queue', `No stuck messages, exiting iterator for ${this.contentSessionId}`);
         break;
       }
     }
+    logger.info('queue', `Iterator exited (iter=${iterCount}, closed=${this.closed}, aborted=${this.signal?.aborted}) for ${this.contentSessionId}`);
   }
 }
 
@@ -263,14 +274,21 @@ export class ObserverSession {
   }
 
   destroy(): void {
-    if (this.destroyed) return;
+    if (this.destroyed) {
+      logger.info('observer', `destroy() called but already destroyed for ${this.contentSessionId}`);
+      return;
+    }
+    logger.info('observer', `destroy() starting for ${this.contentSessionId} (hasConversation=${!!this.conversation}, pendingResults=${this.pendingResults.size})`);
     this.destroyed = true;
     this.abortController.abort();
     this.queue.close();
 
     // Kill the SDK subprocess
     if (this.conversation) {
-      try { this.conversation.close(); } catch {}
+      logger.info('observer', `Closing SDK conversation for ${this.contentSessionId}`);
+      try { this.conversation.close(); } catch (err) {
+        logger.error('observer', `Error closing conversation for ${this.contentSessionId}`, err);
+      }
       this.conversation = null;
     }
 
@@ -278,6 +296,7 @@ export class ObserverSession {
       pending.resolve(null);
     }
     this.pendingResults.clear();
+    logger.info('observer', `destroy() completed for ${this.contentSessionId}`);
   }
 
   isDestroyed(): boolean {
@@ -319,14 +338,19 @@ export class ObserverSession {
         logger.info('observer', `Resuming session ${this.contentSessionId} with memorySessionId`);
       }
 
+      logger.info('observer', `Starting SDK query for ${this.contentSessionId} (resume=${isResume})`);
       const conversation = query(queryArgs);
       this.conversation = conversation;
+      logger.info('observer', `SDK query created for ${this.contentSessionId}`);
 
       // Idle timeout: if no SDK messages for 5 min, force-close
       const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
       let lastMessageTime = Date.now();
+      let sdkMessageCount = 0;
       const idleChecker = setInterval(() => {
-        if (Date.now() - lastMessageTime > QUERY_IDLE_TIMEOUT_MS) {
+        const idleMs = Date.now() - lastMessageTime;
+        logger.info('observer', `SDK idle check for ${this.contentSessionId}: ${Math.round(idleMs / 1000)}s since last message, ${sdkMessageCount} total messages`);
+        if (idleMs > QUERY_IDLE_TIMEOUT_MS) {
           logger.warn('observer', `SDK query idle timeout for ${this.contentSessionId}, aborting`);
           this.abortController.abort();
           if (this.conversation) {
@@ -338,7 +362,9 @@ export class ObserverSession {
 
       try {
         for await (const message of conversation) {
+          sdkMessageCount++;
           lastMessageTime = Date.now();
+          logger.info('observer', `SDK message #${sdkMessageCount} type=${message.type} for ${this.contentSessionId}`);
 
           // Capture memory session ID from first assistant message
           if (message.type === 'assistant' && !this.memorySessionId) {
@@ -374,17 +400,20 @@ export class ObserverSession {
       } finally {
         clearInterval(idleChecker);
         this.conversation = null;
+        logger.info('observer', `SDK for-await loop exited for ${this.contentSessionId} (${sdkMessageCount} messages processed)`);
       }
     } catch (error) {
-      logger.error('observer', 'Conversation error', error);
+      logger.error('observer', `Conversation error for ${this.contentSessionId}`, error);
     } finally {
-      if (currentPendingMsg) {
-        this.resolveAndCleanup(currentPendingMsg, '');
+      const leftover = currentPendingMsg as PendingMessage | null;
+      if (leftover) {
+        logger.info('observer', `Resolving leftover pending msg id=${leftover.id} with empty text`);
+        this.resolveAndCleanup(leftover, '');
       }
-      logger.info('observer', `Conversation ended for ${this.contentSessionId}`);
 
       // Auto-restart if pending messages remain
       const remainingCount = getPendingCount(this.contentSessionId);
+      logger.info('observer', `Conversation ended for ${this.contentSessionId} (remaining=${remainingCount}, restarts=${this.restartCount}/${MAX_RESTARTS}, destroyed=${this.destroyed})`);
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
         logger.info('observer', `${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
         forceUnstickAll(this.contentSessionId);

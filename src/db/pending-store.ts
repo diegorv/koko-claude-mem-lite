@@ -34,7 +34,7 @@ export function claimNextPending(contentSessionId: string): PendingMessage | nul
 
     if (!row) return null;
 
-    db.prepare('UPDATE pending_messages SET status = ? WHERE id = ?').run('processing', row.id);
+    db.prepare('UPDATE pending_messages SET status = ?, created_at_epoch = ? WHERE id = ?').run('processing', Date.now(), row.id);
     return { ...row, status: 'processing' };
   })();
 
