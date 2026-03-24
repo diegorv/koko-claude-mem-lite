@@ -3082,7 +3082,7 @@ function getRecentSummaries(project, limit) {
     "SELECT * FROM summaries WHERE project = ? ORDER BY created_at_epoch DESC LIMIT ?"
   ).all(project, limit);
 }
-function searchObservationsFts(query2, project, limit = 10) {
+function searchObservationsFts(query3, project, limit = 10) {
   const db2 = getDb();
   if (project) {
     return db2.prepare(
@@ -3092,7 +3092,7 @@ function searchObservationsFts(query2, project, limit = 10) {
        WHERE observations_fts MATCH ? AND o.project = ?
        ORDER BY f.rank
        LIMIT ?`
-    ).all(query2, project, limit);
+    ).all(query3, project, limit);
   }
   return db2.prepare(
     `SELECT o.id, o.title, o.narrative, o.facts, o.project, o.created_at, f.rank
@@ -3101,7 +3101,7 @@ function searchObservationsFts(query2, project, limit = 10) {
      WHERE observations_fts MATCH ?
      ORDER BY f.rank
      LIMIT ?`
-  ).all(query2, limit);
+  ).all(query3, limit);
 }
 function searchObservationsIndex(filters) {
   const db2 = getDb();
@@ -3669,6 +3669,318 @@ function parseCleanupResults(text, items) {
   return results;
 }
 
+// src/worker/observer.ts
+import { query as query2 } from "@anthropic-ai/claude-agent-sdk";
+var AsyncQueue = class {
+  buffer = [];
+  resolve = null;
+  closed = false;
+  push(item) {
+    if (this.closed) return;
+    if (this.resolve) {
+      const r = this.resolve;
+      this.resolve = null;
+      r({ value: item, done: false });
+    } else {
+      this.buffer.push(item);
+    }
+  }
+  close() {
+    this.closed = true;
+    if (this.resolve) {
+      const r = this.resolve;
+      this.resolve = null;
+      r({ value: void 0, done: true });
+    }
+  }
+  [Symbol.asyncIterator]() {
+    return {
+      next: () => {
+        if (this.buffer.length > 0) {
+          return Promise.resolve({ value: this.buffer.shift(), done: false });
+        }
+        if (this.closed) {
+          return Promise.resolve({ value: void 0, done: true });
+        }
+        return new Promise((resolve) => {
+          this.resolve = resolve;
+        });
+      }
+    };
+  }
+};
+var SYSTEM_PROMPT = `You are a specialized observer creating searchable memory FOR FUTURE SESSIONS.
+
+CRITICAL: Record what was LEARNED/BUILT/FIXED/DEPLOYED/CONFIGURED, not what you (the observer) are doing.
+
+You do not have access to tools. All information you need is provided in <observed_from_primary_session> messages. Create observations from what you observe \u2014 no investigation needed.
+
+Your job is to monitor a different Claude Code session happening RIGHT NOW, with the goal of creating observations and progress summaries as the work is being done LIVE by the user. You are NOT the one doing the work \u2014 you are ONLY observing and recording.
+
+WHAT TO RECORD
+--------------
+Focus on deliverables and capabilities:
+- What the system NOW DOES differently (new capabilities)
+- What shipped to users/production (features, fixes, configs, docs)
+- Bugs found with root cause analysis
+- Non-obvious gotchas and workarounds
+- Architecture decisions with rationale
+- API behaviors or quirks discovered
+
+Use verbs like: implemented, fixed, deployed, configured, migrated, optimized, added, refactored
+
+GOOD: "Authentication now supports OAuth2 with PKCE flow"
+GOOD: "Worker crashes because sqlite-vec isn't loaded before query \u2014 fixed by moving loadExtension to init"
+BAD: "Analyzed authentication implementation and stored findings"
+BAD: "File X was read" / "Function Y was added"
+
+WHEN TO SKIP
+------------
+Skip routine operations \u2014 output nothing if:
+- Empty status checks or simple file listings
+- Package installations with no errors
+- Repetitive operations you've already documented
+- File reads that reveal nothing surprising
+- Routine edits (import changes, formatting, config tweaks)
+- CSS/style-only changes
+- Removing debug/logging statements
+
+**No output necessary if skipping.**
+
+OBSERVATION TYPES (use exactly one):
+- bugfix: something was broken, now fixed
+- feature: new capability added
+- refactor: code restructured, behavior unchanged
+- discovery: learning about existing system (only if non-obvious insight)
+- decision: architectural/design choice with rationale
+- change: generic modification (docs, config, misc)
+
+OUTPUT FORMAT
+-------------
+\`\`\`xml
+<observation>
+  <type>bugfix | feature | refactor | discovery | decision | change</type>
+  <title>Short title capturing the core action (5-10 words)</title>
+  <facts>
+    <fact>Concise self-contained statement with specifics (filenames, values)</fact>
+    <fact>Another specific fact</fact>
+  </facts>
+  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
+  <files_read>
+    <file>path/to/file</file>
+  </files_read>
+  <files_modified>
+    <file>path/to/file</file>
+  </files_modified>
+</observation>
+\`\`\`
+
+IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
+function buildInitPrompt(project, userPrompt) {
+  return `${SYSTEM_PROMPT}
+
+MEMORY PROCESSING START
+=======================
+Session started for project: ${project}
+${userPrompt ? `User request: ${userPrompt}` : ""}`;
+}
+function buildObservationPrompt(toolName, toolInput, toolResponse, cwd) {
+  return `<observed_from_primary_session>
+  <what_happened>${toolName}</what_happened>
+  <occurred_at>${(/* @__PURE__ */ new Date()).toISOString()}</occurred_at>${cwd ? `
+  <working_directory>${cwd}</working_directory>` : ""}
+  <parameters>${truncate3(toolInput, 2e3)}</parameters>
+  <outcome>${truncate3(toolResponse, 3e3)}</outcome>
+</observed_from_primary_session>`;
+}
+function buildSummaryPrompt(lastAssistantMessage) {
+  return `--- MODE SWITCH: PROGRESS SUMMARY ---
+Do NOT output <observation> tags. This is a summary request, not an observation request.
+Your response MUST use <summary> tags ONLY.
+
+Write progress notes of what was done, what was learned, and what's next. This is a checkpoint to capture progress so far.
+
+Claude's Full Response to User:
+${truncate3(lastAssistantMessage, 5e3)}
+
+Respond in this XML format:
+<summary>
+  <request>What the user originally asked for</request>
+  <investigated>What was explored or researched</investigated>
+  <learned>Key findings or discoveries</learned>
+  <completed>What was actually done/implemented</completed>
+  <next_steps>What remains to be done</next_steps>
+</summary>
+
+Output ONLY the summary XML, nothing else.`;
+}
+function truncate3(str, maxLen) {
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen) + "... [truncated]";
+}
+var IDLE_TIMEOUT_MS = 3 * 60 * 1e3;
+var ObserverSession = class {
+  queue = new AsyncQueue();
+  pendingObservations = /* @__PURE__ */ new Map();
+  pendingSummaries = /* @__PURE__ */ new Map();
+  conversationPromise;
+  idleTimer = null;
+  destroyed = false;
+  messageCounter = 0;
+  contentSessionId;
+  project;
+  constructor(contentSessionId, project, userPrompt) {
+    this.contentSessionId = contentSessionId;
+    this.project = project;
+    this.conversationPromise = this.runConversation(project, userPrompt);
+    this.resetIdleTimer();
+  }
+  resetIdleTimer() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      console.log(`[observer] Session ${this.contentSessionId} idle timeout, destroying`);
+      this.destroy();
+    }, IDLE_TIMEOUT_MS);
+  }
+  nextId() {
+    return `msg-${++this.messageCounter}`;
+  }
+  async pushObservation(toolName, toolInput, toolResponse, cwd) {
+    if (this.destroyed) return null;
+    this.resetIdleTimer();
+    const id = this.nextId();
+    const prompt = buildObservationPrompt(toolName, toolInput, toolResponse, cwd);
+    return new Promise((resolve, reject) => {
+      this.pendingObservations.set(id, { resolve, reject });
+      this.queue.push({ kind: "observation", id, prompt });
+    });
+  }
+  async pushSummary(lastAssistantMessage) {
+    if (this.destroyed) return null;
+    this.resetIdleTimer();
+    const id = this.nextId();
+    const prompt = buildSummaryPrompt(lastAssistantMessage);
+    return new Promise((resolve, reject) => {
+      this.pendingSummaries.set(id, { resolve, reject });
+      this.queue.push({ kind: "summary", id, prompt });
+    });
+  }
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.queue.close();
+    for (const [, pending] of this.pendingObservations) {
+      pending.resolve(null);
+    }
+    for (const [, pending] of this.pendingSummaries) {
+      pending.resolve(null);
+    }
+    this.pendingObservations.clear();
+    this.pendingSummaries.clear();
+  }
+  isDestroyed() {
+    return this.destroyed;
+  }
+  async runConversation(project, userPrompt) {
+    let currentMessage = null;
+    try {
+      const messageGenerator = (async function* (self) {
+        yield buildInitPrompt(project, userPrompt);
+        for await (const msg of self.queue) {
+          currentMessage = msg;
+          yield msg.prompt;
+        }
+      })(this);
+      const conversation = query2({
+        prompt: messageGenerator,
+        options: {
+          model: "claude-sonnet-4-6",
+          systemPrompt: SYSTEM_PROMPT,
+          maxTurns: 0,
+          // unlimited — we control via the generator
+          tools: [],
+          disallowedTools: ["*"]
+        }
+      });
+      for await (const message of conversation) {
+        if (message.type === "assistant" && message.message?.content) {
+          let text = "";
+          for (const block of message.message.content) {
+            if (block.type === "text") text += block.text;
+          }
+          if (currentMessage && text) {
+            this.resolveMessage(currentMessage, text);
+            currentMessage = null;
+          }
+        }
+        if (message.type === "result" && message.subtype === "success") {
+          const text = message.result || "";
+          if (currentMessage && text) {
+            this.resolveMessage(currentMessage, text);
+            currentMessage = null;
+          }
+        }
+      }
+    } catch (error) {
+      console.error("[observer] Conversation error:", error);
+    } finally {
+      if (currentMessage) {
+        this.resolveMessage(currentMessage, "");
+      }
+      this.destroy();
+    }
+  }
+  resolveMessage(msg, text) {
+    if (msg.kind === "observation") {
+      const pending = this.pendingObservations.get(msg.id);
+      if (pending) {
+        this.pendingObservations.delete(msg.id);
+        const parsed = text ? parseObservationXml(text) : null;
+        pending.resolve(parsed);
+      }
+    } else if (msg.kind === "summary") {
+      const pending = this.pendingSummaries.get(msg.id);
+      if (pending) {
+        this.pendingSummaries.delete(msg.id);
+        const parsed = text ? parseSummaryXml(text) : null;
+        pending.resolve(parsed);
+      }
+    }
+  }
+};
+var activeSessions = /* @__PURE__ */ new Map();
+function getOrCreateObserver(contentSessionId, project, userPrompt) {
+  let session = activeSessions.get(contentSessionId);
+  if (session && !session.isDestroyed()) return session;
+  session = new ObserverSession(contentSessionId, project, userPrompt);
+  activeSessions.set(contentSessionId, session);
+  console.log(`[observer] Created session for ${contentSessionId} (project: ${project})`);
+  return session;
+}
+function getObserver(contentSessionId) {
+  const session = activeSessions.get(contentSessionId);
+  if (session?.isDestroyed()) {
+    activeSessions.delete(contentSessionId);
+    return void 0;
+  }
+  return session;
+}
+function destroyObserver(contentSessionId) {
+  const session = activeSessions.get(contentSessionId);
+  if (session) {
+    session.destroy();
+    activeSessions.delete(contentSessionId);
+    console.log(`[observer] Destroyed session for ${contentSessionId}`);
+  }
+}
+function destroyAllObservers() {
+  for (const [id, session] of activeSessions) {
+    session.destroy();
+  }
+  activeSessions.clear();
+}
+
 // src/utils/privacy.ts
 function stripPrivateTags(content) {
   return content.replace(/<memory-lite-context>[\s\S]*?<\/memory-lite-context>/g, "").replace(/<private>[\s\S]*?<\/private>/g, "").trim();
@@ -3706,8 +4018,8 @@ function storeEmbedding(db2, observationId, embedding) {
     return false;
   }
 }
-async function searchSemantic(db2, query2, limit = 10) {
-  const embedding = await generateEmbedding(query2);
+async function searchSemantic(db2, query3, limit = 10) {
+  const embedding = await generateEmbedding(query3);
   if (!embedding) return [];
   try {
     const results = db2.prepare(
@@ -3760,6 +4072,7 @@ app.post("/api/sessions", async (c) => {
       return c.json({ sessionId: null, skipped: true });
     }
     const session = createSession(contentSessionId, project || "unknown", cleanPrompt);
+    getOrCreateObserver(contentSessionId, project || "unknown", cleanPrompt);
     return c.json({ sessionId: session.id });
   } catch (error) {
     console.error("[routes] /api/sessions error:", error);
@@ -3776,7 +4089,18 @@ app.post("/api/observations", async (c) => {
     if (!session) return c.json({ error: "Session not found" }, 404);
     const cleanInput = stripPrivateTags(tool_input || "");
     const cleanResponse = stripPrivateTags(tool_response || "");
-    const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+    let parsed;
+    const observer = getObserver(contentSessionId);
+    if (observer) {
+      try {
+        parsed = await observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd);
+      } catch (err) {
+        console.error("[routes] Observer failed, falling back to single-turn:", err);
+        parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+      }
+    } else {
+      parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+    }
     if (!parsed || parsed.type === "skip") {
       return c.json({ ok: true, skipped: true });
     }
@@ -3799,7 +4123,18 @@ app.post("/api/summarize", async (c) => {
     if (!last_assistant_message || last_assistant_message.trim().length < 100) {
       return c.json({ ok: true, skipped: true, reason: "no meaningful assistant message" });
     }
-    const summary = await generateSummary(last_assistant_message);
+    let summary;
+    const observer = getObserver(contentSessionId);
+    if (observer) {
+      try {
+        summary = await observer.pushSummary(last_assistant_message);
+      } catch (err) {
+        console.error("[routes] Observer summary failed, falling back:", err);
+        summary = await generateSummary(last_assistant_message);
+      }
+    } else {
+      summary = await generateSummary(last_assistant_message);
+    }
     if (!summary) return c.json({ ok: true, skipped: true, reason: "AI summary failed" });
     const hasContent = summary.completed || summary.learned || summary.investigated;
     const isTrivial = hasContent && /nothing|no .*(finding|change|work|action|interaction)/i.test(
@@ -3820,6 +4155,7 @@ app.post("/api/sessions/complete", async (c) => {
     const { contentSessionId } = await c.req.json();
     if (!contentSessionId) return c.json({ error: "contentSessionId required" }, 400);
     completeSession(contentSessionId);
+    destroyObserver(contentSessionId);
     return c.json({ ok: true });
   } catch (error) {
     console.error("[routes] /api/sessions/complete error:", error);
@@ -3890,7 +4226,7 @@ app.get("/api/dashboard/stats", (c) => {
   try {
     const db2 = getDb();
     const sessions = db2.prepare("SELECT COUNT(*) as count FROM sessions").get();
-    const activeSessions = db2.prepare("SELECT COUNT(*) as count FROM sessions WHERE status = 'active'").get();
+    const activeSessions2 = db2.prepare("SELECT COUNT(*) as count FROM sessions WHERE status = 'active'").get();
     const observations = db2.prepare("SELECT COUNT(*) as count FROM observations").get();
     const summaries = db2.prepare("SELECT COUNT(*) as count FROM summaries").get();
     const projects = db2.prepare("SELECT COUNT(DISTINCT project) as count FROM sessions").get();
@@ -3906,7 +4242,7 @@ app.get("/api/dashboard/stats", (c) => {
     `).all(Date.now() - 7 * 864e5);
     return c.json({
       sessions: sessions.count,
-      activeSessions: activeSessions.count,
+      activeSessions: activeSessions2.count,
       observations: observations.count,
       summaries: summaries.count,
       projects: projects.count,
@@ -4198,6 +4534,7 @@ function removePid() {
 }
 function shutdown() {
   console.log("[worker] Shutting down...");
+  destroyAllObservers();
   removePid();
   closeDb();
   process.exit(0);

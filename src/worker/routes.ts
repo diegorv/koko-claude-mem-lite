@@ -11,6 +11,7 @@ import {
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext, generateContextDetailed } from '../context/generator.js';
 import { extractObservation, generateSummary, reviewForCleanup, type CleanupItem } from './summarizer.js';
+import { getOrCreateObserver, getObserver, destroyObserver } from './observer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
@@ -45,6 +46,10 @@ app.post('/api/sessions', async (c) => {
     }
 
     const session = createSession(contentSessionId, project || 'unknown', cleanPrompt);
+
+    // Start multi-turn observer conversation
+    getOrCreateObserver(contentSessionId, project || 'unknown', cleanPrompt);
+
     return c.json({ sessionId: session.id });
   } catch (error) {
     console.error('[routes] /api/sessions error:', error);
@@ -52,7 +57,7 @@ app.post('/api/sessions', async (c) => {
   }
 });
 
-// Store observation (extracts structured data via AI)
+// Store observation (multi-turn observer with single-turn fallback)
 app.post('/api/observations', async (c) => {
   try {
     const { contentSessionId, tool_name, tool_input, tool_response, cwd } = await c.req.json();
@@ -66,7 +71,20 @@ app.post('/api/observations', async (c) => {
     const cleanInput = stripPrivateTags(tool_input || '');
     const cleanResponse = stripPrivateTags(tool_response || '');
 
-    const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+    // Try multi-turn observer first, fall back to single-turn
+    let parsed;
+    const observer = getObserver(contentSessionId);
+    if (observer) {
+      try {
+        parsed = await observer.pushObservation(tool_name, cleanInput, cleanResponse, cwd);
+      } catch (err) {
+        console.error('[routes] Observer failed, falling back to single-turn:', err);
+        parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+      }
+    } else {
+      // No observer session (e.g., worker restarted mid-session) — use single-turn
+      parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+    }
 
     if (!parsed || parsed.type === 'skip') {
       return c.json({ ok: true, skipped: true });
@@ -99,7 +117,19 @@ app.post('/api/summarize', async (c) => {
       return c.json({ ok: true, skipped: true, reason: 'no meaningful assistant message' });
     }
 
-    const summary = await generateSummary(last_assistant_message);
+    // Try multi-turn observer first, fall back to single-turn
+    let summary;
+    const observer = getObserver(contentSessionId);
+    if (observer) {
+      try {
+        summary = await observer.pushSummary(last_assistant_message);
+      } catch (err) {
+        console.error('[routes] Observer summary failed, falling back:', err);
+        summary = await generateSummary(last_assistant_message);
+      }
+    } else {
+      summary = await generateSummary(last_assistant_message);
+    }
     if (!summary) return c.json({ ok: true, skipped: true, reason: 'AI summary failed' });
 
     // Skip summaries that are clearly empty/trivial
@@ -125,6 +155,7 @@ app.post('/api/sessions/complete', async (c) => {
     const { contentSessionId } = await c.req.json();
     if (!contentSessionId) return c.json({ error: 'contentSessionId required' }, 400);
     completeSession(contentSessionId);
+    destroyObserver(contentSessionId);
     return c.json({ ok: true });
   } catch (error) {
     console.error('[routes] /api/sessions/complete error:', error);

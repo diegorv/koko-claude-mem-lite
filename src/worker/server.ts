@@ -7,6 +7,7 @@ import { app } from './routes.js';
 import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
 import { closeDb } from '../db/database.js';
+import { destroyAllObservers } from './observer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +36,7 @@ function removePid(): void {
 
 function shutdown(): void {
   console.log('[worker] Shutting down...');
+  destroyAllObservers();
   removePid();
   closeDb();
   process.exit(0);

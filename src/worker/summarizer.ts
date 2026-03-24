@@ -48,7 +48,7 @@ function extractArray(content: string, arrayName: string, elementName: string): 
   return elements;
 }
 
-function parseObservationXml(text: string): ParsedObservation | null {
+export function parseObservationXml(text: string): ParsedObservation | null {
   const obsRegex = /<observation>([\s\S]*?)<\/observation>/;
   const match = obsRegex.exec(text);
   if (!match) return null;
@@ -64,7 +64,7 @@ function parseObservationXml(text: string): ParsedObservation | null {
   };
 }
 
-function parseSummaryXml(text: string): ParsedSummary | null {
+export function parseSummaryXml(text: string): ParsedSummary | null {
   const summaryRegex = /<summary>([\s\S]*?)<\/summary>/;
   const match = summaryRegex.exec(text);
   if (!match) return null;
