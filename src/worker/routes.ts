@@ -284,13 +284,23 @@ app.get('/api/dashboard/feed', (c) => {
     const before = c.req.query('before');
     const db = getDb();
 
-    const conditions: string[] = [];
+    const obsConditions: string[] = [];
+    const sumConditions: string[] = [];
     const params: any[] = [];
 
-    if (project) { conditions.push('project = ?'); params.push(project); }
-    if (before) { conditions.push('created_at_epoch < ?'); params.push(parseInt(before)); }
+    if (project) {
+      obsConditions.push('o.project = ?');
+      sumConditions.push('sm.project = ?');
+      params.push(project);
+    }
+    if (before) {
+      obsConditions.push('o.created_at_epoch < ?');
+      sumConditions.push('sm.created_at_epoch < ?');
+      params.push(parseInt(before));
+    }
 
-    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+    const obsWhere = obsConditions.length > 0 ? 'WHERE ' + obsConditions.join(' AND ') : '';
+    const sumWhere = sumConditions.length > 0 ? 'WHERE ' + sumConditions.join(' AND ') : '';
 
     const obs = db.prepare(`
       SELECT o.id, o.session_id, o.project, o.type, o.title, o.facts, o.narrative,
@@ -299,7 +309,7 @@ app.get('/api/dashboard/feed', (c) => {
         'observation' as item_type
       FROM observations o
       JOIN sessions s ON s.id = o.session_id
-      ${where ? where.replace(/project/g, 'o.project').replace(/created_at_epoch/g, 'o.created_at_epoch') : ''}
+      ${obsWhere}
       ORDER BY o.created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
 
@@ -310,7 +320,7 @@ app.get('/api/dashboard/feed', (c) => {
         'summary' as item_type
       FROM summaries sm
       JOIN sessions s ON s.id = sm.session_id
-      ${where ? where.replace(/project/g, 'sm.project').replace(/created_at_epoch/g, 'sm.created_at_epoch') : ''}
+      ${sumWhere}
       ORDER BY sm.created_at_epoch DESC LIMIT ?
     `).all(...params, limit);
 
