@@ -13,6 +13,7 @@
 
   // Cleanup state
   let cleanupResults: CleanupResult[] = $state([]);
+  let pendingItems: PendingItem[] = $state([]);
   let cleanupRunning = $state(false);
   let cleanupDone = $state(false);
   let cleanupApplying = $state(false);
