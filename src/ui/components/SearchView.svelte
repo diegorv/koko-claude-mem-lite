@@ -7,15 +7,20 @@
   let results: any[] = $state([]);
   let loading = $state(false);
   let searched = $state(false);
+  let searchError: string | null = $state(null);
   let localQuery = $state(query);
 
   async function doSearch() {
     if (!localQuery.trim()) return;
     loading = true;
     searched = true;
+    searchError = null;
     try {
       const res = await search(localQuery, project || undefined);
       results = res.results;
+    } catch (err) {
+      results = [];
+      searchError = err instanceof Error ? err.message : 'Search failed';
     } finally {
       loading = false;
     }
@@ -56,6 +61,8 @@
       <FeedItemComponent item={{ ...r, item_type: 'observation' }} ondelete={(deleted) => { results = results.filter(i => i.id !== deleted.id); }} />
     {/each}
   </div>
+{:else if searchError}
+  <div class="empty">{searchError}</div>
 {:else if searched}
   <div class="empty">No results found for "{localQuery}"</div>
 {/if}

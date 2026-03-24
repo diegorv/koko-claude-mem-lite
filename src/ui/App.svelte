@@ -13,11 +13,16 @@
   let selectedProject: string = $state('');
   let activeTab: 'feed' | 'sessions' | 'search' | 'context' | 'settings' = $state('feed');
   let searchQuery = $state('');
+  let initError: string | null = $state(null);
 
   async function init() {
-    const [s, p] = await Promise.all([getStats(), getProjects()]);
-    stats = s;
-    projects = p.projects;
+    try {
+      const [s, p] = await Promise.all([getStats(), getProjects()]);
+      stats = s;
+      projects = p.projects;
+    } catch (err) {
+      initError = err instanceof Error ? err.message : 'Failed to connect to worker';
+    }
   }
 
   init();
@@ -31,7 +36,11 @@
 <div class="app">
   <Header onsearch={handleSearch} />
 
-  {#if stats}
+  {#if initError}
+    <div style="padding: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); margin: 8px 0; font-size: 12px;">
+      Failed to load: {initError}
+    </div>
+  {:else if stats}
     <StatsBar {stats} />
   {/if}
 

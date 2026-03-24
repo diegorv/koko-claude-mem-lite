@@ -8,17 +8,25 @@
   let loading = $state(true);
   let hasMore = $state(true);
 
+  let error: string | null = $state(null);
+
   async function load(reset = false) {
     loading = true;
-    const before = reset ? undefined : items[items.length - 1]?.created_at_epoch;
-    const { feed } = await getFeed(project || undefined, 30, before);
-    if (reset) {
-      items = feed;
-    } else {
-      items = [...items, ...feed];
+    error = null;
+    try {
+      const before = reset ? undefined : items[items.length - 1]?.created_at_epoch;
+      const { feed } = await getFeed(project || undefined, 30, before);
+      if (reset) {
+        items = feed;
+      } else {
+        items = [...items, ...feed];
+      }
+      hasMore = feed.length === 30;
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to load feed';
+    } finally {
+      loading = false;
     }
-    hasMore = feed.length === 30;
-    loading = false;
   }
 
   $effect(() => {
@@ -33,7 +41,9 @@
     <FeedItemComponent {item} ondelete={(deleted) => { items = items.filter(i => !(i.item_type === deleted.item_type && i.id === deleted.id)); }} />
   {/each}
 
-  {#if loading}
+  {#if error}
+    <div class="empty"><div class="icon">!</div><div>{error}</div></div>
+  {:else if loading}
     <div class="loading"><span class="loading-pulse">Loading...</span></div>
   {:else if items.length === 0}
     <div class="empty">
