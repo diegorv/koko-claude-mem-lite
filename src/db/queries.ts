@@ -182,8 +182,23 @@ export interface SearchResult {
   rank: number;
 }
 
+/**
+ * Sanitize user input for FTS5 MATCH syntax.
+ * Wraps each token in double quotes to prevent FTS5 syntax errors
+ * from special characters like *, -, AND, OR, NEAR, etc.
+ */
+function sanitizeFtsQuery(query: string): string {
+  // Remove characters that break FTS5 even inside quotes
+  const cleaned = query.replace(/[""]/g, '');
+  // Split into tokens and wrap each in quotes for safe MATCH
+  const tokens = cleaned.split(/\s+/).filter(t => t.length > 0);
+  if (tokens.length === 0) return '""';
+  return tokens.map(t => `"${t}"`).join(' ');
+}
+
 export function searchObservationsFts(query: string, project?: string, limit: number = 10): SearchResult[] {
   const db = getDb();
+  const safeQuery = sanitizeFtsQuery(query);
 
   if (project) {
     return db.prepare(
@@ -193,7 +208,7 @@ export function searchObservationsFts(query: string, project?: string, limit: nu
        WHERE observations_fts MATCH ? AND o.project = ?
        ORDER BY f.rank
        LIMIT ?`
-    ).all(query, project, limit) as SearchResult[];
+    ).all(safeQuery, project, limit) as SearchResult[];
   }
 
   return db.prepare(
@@ -203,7 +218,7 @@ export function searchObservationsFts(query: string, project?: string, limit: nu
      WHERE observations_fts MATCH ?
      ORDER BY f.rank
      LIMIT ?`
-  ).all(query, limit) as SearchResult[];
+  ).all(safeQuery, limit) as SearchResult[];
 }
 
 // --- Progressive Disclosure Search ---
@@ -234,7 +249,7 @@ export function searchObservationsIndex(filters: SearchIndexFilters): SearchInde
   const offset = filters.offset || 0;
 
   const conditions: string[] = ['observations_fts MATCH ?'];
-  const params: any[] = [filters.query];
+  const params: any[] = [sanitizeFtsQuery(filters.query)];
 
   if (filters.project) {
     conditions.push('o.project = ?');

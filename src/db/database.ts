@@ -102,6 +102,7 @@ function initializeSchema(database: Database.Database): void {
   database.pragma('journal_mode = WAL');
   database.pragma('foreign_keys = ON');
   database.pragma('cache_size = 10000');
+  database.pragma('busy_timeout = 5000');
 
   let currentVersion = 0;
   try {

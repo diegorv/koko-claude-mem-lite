@@ -2969,6 +2969,7 @@ function initializeSchema(database) {
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   database.pragma("cache_size = 10000");
+  database.pragma("busy_timeout = 5000");
   let currentVersion = 0;
   try {
     const row = database.prepare("SELECT version FROM schema_version LIMIT 1").get();
@@ -3114,8 +3115,15 @@ function getRecentSummaries(project, limit) {
     "SELECT * FROM summaries WHERE project = ? ORDER BY created_at_epoch DESC LIMIT ?"
   ).all(project, limit);
 }
+function sanitizeFtsQuery(query3) {
+  const cleaned = query3.replace(/[""]/g, "");
+  const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0);
+  if (tokens.length === 0) return '""';
+  return tokens.map((t) => `"${t}"`).join(" ");
+}
 function searchObservationsFts(query3, project, limit = 10) {
   const db2 = getDb();
+  const safeQuery = sanitizeFtsQuery(query3);
   if (project) {
     return db2.prepare(
       `SELECT o.id, o.title, o.narrative, o.facts, o.project, o.created_at, f.rank
@@ -3124,7 +3132,7 @@ function searchObservationsFts(query3, project, limit = 10) {
        WHERE observations_fts MATCH ? AND o.project = ?
        ORDER BY f.rank
        LIMIT ?`
-    ).all(query3, project, limit);
+    ).all(safeQuery, project, limit);
   }
   return db2.prepare(
     `SELECT o.id, o.title, o.narrative, o.facts, o.project, o.created_at, f.rank
@@ -3133,14 +3141,14 @@ function searchObservationsFts(query3, project, limit = 10) {
      WHERE observations_fts MATCH ?
      ORDER BY f.rank
      LIMIT ?`
-  ).all(query3, limit);
+  ).all(safeQuery, limit);
 }
 function searchObservationsIndex(filters) {
   const db2 = getDb();
   const limit = filters.limit || 20;
   const offset = filters.offset || 0;
   const conditions = ["observations_fts MATCH ?"];
-  const params = [filters.query];
+  const params = [sanitizeFtsQuery(filters.query)];
   if (filters.project) {
     conditions.push("o.project = ?");
     params.push(filters.project);
