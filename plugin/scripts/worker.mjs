@@ -2878,6 +2878,10 @@ function getSettingsPath() {
 
 // src/db/database.ts
 var db = null;
+var dbReady = false;
+function isDbReady() {
+  return dbReady;
+}
 var SCHEMA_VERSION = 2;
 var SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -2970,6 +2974,7 @@ function initializeSchema(database) {
   database.pragma("foreign_keys = ON");
   database.pragma("cache_size = 10000");
   database.pragma("busy_timeout = 5000");
+  database.pragma("mmap_size = 268435456");
   let currentVersion = 0;
   try {
     const row = database.prepare("SELECT version FROM schema_version LIMIT 1").get();
@@ -3008,12 +3013,14 @@ function getDb() {
   db = new Database(getDbPath());
   initializeSchema(db);
   tryLoadSqliteVec(db);
+  dbReady = true;
   return db;
 }
 function closeDb() {
   if (db) {
     db.close();
     db = null;
+    dbReady = false;
   }
 }
 
@@ -3921,6 +3928,7 @@ function truncate3(str, maxLen) {
   return str.slice(0, maxLen) + "... [truncated]";
 }
 var IDLE_TIMEOUT_MS = 3 * 60 * 1e3;
+var MAX_RESTARTS = 3;
 var DurableQueue = class {
   emitter = new EventEmitter();
   closed = false;
@@ -3983,18 +3991,20 @@ var DurableQueue = class {
     }
   }
 };
-var ObserverSession = class {
+var ObserverSession = class _ObserverSession {
   queue;
   pendingResults = /* @__PURE__ */ new Map();
   destroyed = false;
   memorySessionId;
   abortController = new AbortController();
+  restartCount;
   contentSessionId;
   project;
-  constructor(contentSessionId, project, userPrompt, memorySessionId) {
+  constructor(contentSessionId, project, userPrompt, memorySessionId, restartCount = 0) {
     this.contentSessionId = contentSessionId;
     this.project = project;
     this.memorySessionId = memorySessionId || null;
+    this.restartCount = restartCount;
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
     this.runConversation(project, userPrompt);
   }
@@ -4088,7 +4098,31 @@ var ObserverSession = class {
         this.resolveAndCleanup(currentPendingMsg, "");
       }
       console.log(`[observer] Conversation ended for ${this.contentSessionId}`);
-      this.destroy();
+      const remainingCount = getPendingCount(this.contentSessionId);
+      if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
+        console.log(`[observer] ${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
+        forceUnstickAll(this.contentSessionId);
+        this.destroyed = true;
+        this.abortController.abort();
+        this.queue.close();
+        for (const [, pending] of this.pendingResults) {
+          pending.resolve(null);
+        }
+        this.pendingResults.clear();
+        const replacement = new _ObserverSession(
+          this.contentSessionId,
+          this.project,
+          void 0,
+          this.memorySessionId,
+          this.restartCount + 1
+        );
+        activeSessions.set(this.contentSessionId, replacement);
+      } else {
+        if (remainingCount > 0) {
+          console.warn(`[observer] ${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
+        }
+        this.destroy();
+      }
     }
   }
   resolveAndCleanup(msg, text) {
@@ -4197,6 +4231,12 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 app.get("/api/health", (c) => c.json({ ok: true }));
+app.get("/api/readiness", (c) => {
+  if (!isDbReady()) {
+    return c.json({ ok: false, reason: "DB not initialized" }, 503);
+  }
+  return c.json({ ok: true });
+});
 app.get("/api/context", (c) => {
   try {
     const project = c.req.query("project") || "unknown";
@@ -4676,7 +4716,15 @@ function removePid() {
   } catch {
   }
 }
+var shutdownInitiated = false;
 function shutdown() {
+  if (shutdownInitiated) return;
+  shutdownInitiated = true;
+  const forceTimer = setTimeout(() => {
+    console.error("[worker] Graceful shutdown timed out after 10s, force exiting");
+    process.exit(1);
+  }, 1e4);
+  forceTimer.unref();
   console.log("[worker] Shutting down...");
   destroyAllObservers();
   removePid();
@@ -4685,6 +4733,7 @@ function shutdown() {
 }
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+process.on("SIGHUP", shutdown);
 async function checkExistingWorker() {
   if (!existsSync4(pidPath)) return false;
   try {
@@ -4712,6 +4761,7 @@ async function checkExistingWorker() {
 var alreadyRunning = await checkExistingWorker();
 if (alreadyRunning) process.exit(0);
 writePid();
+getDb();
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
   console.log(`[worker] Memory-lite worker running on http://127.0.0.1:${port}`);
 });

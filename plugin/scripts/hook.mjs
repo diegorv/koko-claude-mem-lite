@@ -167,11 +167,12 @@ function getSetting(key) {
 }
 
 // src/hooks/hook.ts
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync2, statSync } from "fs";
 import { spawn, execSync } from "child_process";
 import { join as join2, dirname } from "path";
 import { existsSync as existsSync3 } from "fs";
 import { fileURLToPath } from "url";
+import { homedir as homedir2 } from "os";
 var WORKER_BASE = `http://127.0.0.1:${getSetting("WORKER_PORT")}`;
 async function workerFetch(path, options) {
   try {
@@ -200,6 +201,18 @@ async function waitForHealth(timeoutMs) {
   }
   return false;
 }
+async function waitForReadiness(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${WORKER_BASE}/api/readiness`, { signal: AbortSignal.timeout(1e3) });
+      if (res.ok) return true;
+    } catch {
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
 function ensureDeps(pluginRoot) {
   if (existsSync3(join2(pluginRoot, "node_modules", "better-sqlite3"))) return true;
   try {
@@ -220,6 +233,21 @@ async function handleStart() {
   if (await waitForHealth(1e3)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
+  }
+  const pidPath = join2(homedir2(), ".memory-lite", "worker.pid");
+  try {
+    if (existsSync3(pidPath)) {
+      const ageMs = Date.now() - statSync(pidPath).mtimeMs;
+      if (ageMs < 15e3) {
+        console.error("[memory-lite] PID file is recent (<15s), waiting for existing spawn...");
+        if (await waitForReadiness(15e3)) {
+          console.log(JSON.stringify(formatSilentOutput()));
+          return;
+        }
+        console.error("[memory-lite] Existing spawn seems to have failed, attempting new spawn");
+      }
+    }
+  } catch {
   }
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join2(dirname(fileURLToPath(import.meta.url)), "..");
   const workerScript = join2(pluginRoot, "scripts", "worker.mjs");
@@ -245,7 +273,7 @@ async function handleStart() {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
-  const healthy = await waitForHealth(1e4);
+  const healthy = await waitForReadiness(1e4);
   if (!healthy) {
     console.error("[memory-lite] Worker spawned but health check timed out");
   }
