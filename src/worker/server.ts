@@ -37,7 +37,12 @@ function removePid(): void {
   } catch { /* ignore */ }
 }
 
+let shutdownInitiated = false;
+
 function shutdown(): void {
+  if (shutdownInitiated) return;
+  shutdownInitiated = true;
+
   console.log('[worker] Shutting down...');
   destroyAllObservers();
   removePid();
