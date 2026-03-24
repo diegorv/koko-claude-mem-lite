@@ -24,8 +24,11 @@ if (existsSync(uiPath)) {
 const port = parseInt(getSetting('WORKER_PORT'));
 const pidPath = getPidPath();
 
+interface PidInfo { pid: number; port: number; startedAt: number }
+
 function writePid(): void {
-  writeFileSync(pidPath, String(process.pid));
+  const info: PidInfo = { pid: process.pid, port, startedAt: Date.now() };
+  writeFileSync(pidPath, JSON.stringify(info));
 }
 
 function removePid(): void {
@@ -46,16 +49,36 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 // Check if another worker is running
-if (existsSync(pidPath)) {
-  const oldPid = parseInt(readFileSync(pidPath, 'utf-8').trim());
+async function checkExistingWorker(): Promise<boolean> {
+  if (!existsSync(pidPath)) return false;
   try {
-    process.kill(oldPid, 0);
-    console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
-    process.exit(0);
+    const raw = readFileSync(pidPath, 'utf-8').trim();
+    let oldPid: number;
+    let oldPort: number = port;
+    try {
+      const info: PidInfo = JSON.parse(raw);
+      oldPid = info.pid;
+      oldPort = info.port;
+    } catch {
+      // Legacy format: plain PID number
+      oldPid = parseInt(raw);
+    }
+    process.kill(oldPid, 0); // Check if process exists
+    // Verify it's actually our worker via health check
+    const res = await fetch(`http://127.0.0.1:${oldPort}/api/health`, { signal: AbortSignal.timeout(2000) });
+    if (res.ok) {
+      console.log(`[worker] Another worker already running (PID ${oldPid}). Exiting.`);
+      return true;
+    }
   } catch {
-    removePid();
+    // Process doesn't exist or health check failed — stale PID
   }
+  removePid();
+  return false;
 }
+
+const alreadyRunning = await checkExistingWorker();
+if (alreadyRunning) process.exit(0);
 
 writePid();
 
