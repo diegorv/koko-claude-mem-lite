@@ -194,32 +194,36 @@ export async function reviewCleanupStream(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
-    let currentEvent = '';
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7);
-      } else if (line.startsWith('data: ') && currentEvent) {
-        try {
-          const data = JSON.parse(line.slice(6));
-          if (currentEvent === 'items') {
-            onItems(data.items);
-          } else if (currentEvent === 'result') {
-            onResult(data);
-          } else if (currentEvent === 'done') {
-            onDone(data.results || [], data.totalReviewed || 0);
-          }
-        } catch {}
-        currentEvent = '';
+      let currentEvent = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7);
+        } else if (line.startsWith('data: ') && currentEvent) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (currentEvent === 'items') {
+              onItems(data.items);
+            } else if (currentEvent === 'result') {
+              onResult(data);
+            } else if (currentEvent === 'done') {
+              onDone(data.results || [], data.totalReviewed || 0);
+            }
+          } catch {}
+          currentEvent = '';
+        }
       }
     }
+  } finally {
+    reader.cancel();
   }
 }
 
