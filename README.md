@@ -156,7 +156,34 @@ The worker is a background HTTP server (`127.0.0.1:37888`, built with [Hono](htt
 - Serves the dashboard UI static files
 - Auto-spawns on first hook call if not running
 - Writes its PID to `~/.memory-lite/worker.pid`
-- Shuts down gracefully on SIGTERM/SIGINT
+- Shuts down gracefully on SIGTERM/SIGINT/SIGHUP
+- Logs to `~/.memory-lite/worker.log` (structured file logger)
+
+#### Zombie Prevention & Resource Management
+
+The worker has several safety mechanisms to prevent zombie processes and runaway CPU usage:
+
+- **SDK subprocess cleanup** — Each `ObserverSession` holds a reference to the Claude Agent SDK `Query` object and calls `conversation.close()` on destroy. The `AbortController` is passed to the SDK so `abort()` kills the underlying CLI subprocess immediately.
+- **SDK idle timeout** — If the SDK `for await` loop receives no messages for 5 minutes, the query is force-aborted to prevent hung subprocesses.
+- **Stale session reaper** — A background timer (every 60s) checks all active observer sessions. Any session idle for more than 30 minutes is automatically destroyed — this is a safety net for when the `SessionEnd` hook doesn't fire.
+- **Idle auto-shutdown** — If there are zero active sessions and no API requests for 30 minutes, the worker shuts itself down. It will be re-spawned automatically on the next Claude Code session start.
+- **Duplicate worker detection** — On startup, the worker checks the PID file and health endpoint to prevent multiple instances. Stale PID files from crashed workers are cleaned up automatically.
+
+#### Debugging
+
+```bash
+# Check worker health
+curl -s http://localhost:37888/api/health
+
+# View active observer sessions
+curl -s http://localhost:37888/api/debug/sessions
+
+# Check logs
+cat ~/.memory-lite/worker.log
+
+# Kill a stuck worker manually
+lsof -ti :37888 | xargs kill
+```
 
 ### Multi-turn Observer
 
@@ -167,6 +194,8 @@ Instead of a separate AI call per tool use, memory-lite maintains a persistent `
 - Uses a SQLite-backed durable queue (`pending_messages` table) so messages survive worker crashes
 - Stores the Agent SDK session ID so conversations can be resumed if the worker restarts
 - Falls back to single-turn extraction if no observer session is available
+- Properly cleans up SDK subprocesses on session destroy (via `Query.close()` + `AbortController`)
+- Auto-destroyed after 30 minutes of inactivity by the stale session reaper
 
 ### Database Schema
 
@@ -335,6 +364,7 @@ If Ollama or sqlite-vec aren't available, everything continues to work — only 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/health` | Health check → `{ ok: true }` |
+| `GET` | `/api/debug/sessions` | List active observer sessions with idle times |
 | `GET` | `/api/context?project=` | Get context for session injection |
 | `POST` | `/api/sessions` | Create or resume a session |
 | `POST` | `/api/observations` | Store a tool-use observation (AI-extracted) |
