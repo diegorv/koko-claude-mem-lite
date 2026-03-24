@@ -162,6 +162,34 @@ export function getSettingsData(): Promise<SettingsData> {
   return fetchJson('/api/settings');
 }
 
+// Cleanup
+export interface CleanupResult {
+  id: number;
+  type: 'observation' | 'summary';
+  action: 'keep' | 'delete';
+  reason: string;
+}
+
+export async function reviewCleanup(project?: string): Promise<{ results: CleanupResult[]; totalReviewed: number }> {
+  const res = await fetch(`${BASE}/api/cleanup/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+export async function applyCleanup(deletions: { id: number; type: 'observation' | 'summary' }[]): Promise<{ ok: boolean; deleted: number }> {
+  const res = await fetch(`${BASE}/api/cleanup/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deletions }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
 export async function updateSettings(settings: Partial<SettingsData>): Promise<SettingsData> {
   const res = await fetch(`${BASE}/api/settings`, {
     method: 'PUT',

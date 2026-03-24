@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContextPreview, deleteObservation, deleteSummary, type ContextBreakdown, type Observation } from '../api';
+  import { getContextPreview, deleteObservation, deleteSummary, reviewCleanup, applyCleanup, type ContextBreakdown, type CleanupResult } from '../api';
 
   let { project = '' }: { project?: string } = $props();
 
@@ -11,9 +11,19 @@
   let confirmDeleteId: number | null = $state(null);
   let deleting = $state(false);
 
+  // Cleanup state
+  let cleanupResults: CleanupResult[] = $state([]);
+  let cleanupRunning = $state(false);
+  let cleanupDone = $state(false);
+  let cleanupApplying = $state(false);
+  let cleanupMessage = $state('');
+
   async function load() {
     loading = true;
     error = '';
+    cleanupResults = [];
+    cleanupDone = false;
+    cleanupMessage = '';
     try {
       data = await getContextPreview(project || undefined);
     } catch (err) {
@@ -39,7 +49,6 @@
           data.summaries = data.summaries.filter(s => s.id !== id);
         }
       }
-      // Re-fetch to update the raw markdown and token count
       const fresh = await getContextPreview(project || undefined);
       if (data) {
         data.context = fresh.context;
@@ -52,6 +61,48 @@
       confirmDeleteType = '';
       confirmDeleteId = null;
     }
+  }
+
+  async function runCleanup() {
+    cleanupRunning = true;
+    cleanupMessage = '';
+    cleanupResults = [];
+    cleanupDone = false;
+    try {
+      const res = await reviewCleanup(project || undefined);
+      cleanupResults = res.results;
+      cleanupDone = true;
+      const toDelete = res.results.filter(r => r.action === 'delete');
+      cleanupMessage = `Reviewed ${res.totalReviewed} items. ${toDelete.length} flagged for deletion.`;
+    } catch (err) {
+      cleanupMessage = 'Cleanup review failed. Is Claude Agent SDK available?';
+      console.error(err);
+    } finally {
+      cleanupRunning = false;
+    }
+  }
+
+  async function applyCleanupResults() {
+    cleanupApplying = true;
+    try {
+      const toDelete = cleanupResults.filter(r => r.action === 'delete').map(r => ({ id: r.id, type: r.type }));
+      const res = await applyCleanup(toDelete);
+      cleanupMessage = `Deleted ${res.deleted} items. Refreshing...`;
+      cleanupResults = [];
+      cleanupDone = false;
+      await load();
+    } catch (err) {
+      cleanupMessage = 'Failed to apply cleanup';
+      console.error(err);
+    } finally {
+      cleanupApplying = false;
+    }
+  }
+
+  function toggleCleanupItem(id: number) {
+    cleanupResults = cleanupResults.map(r =>
+      r.id === id ? { ...r, action: r.action === 'delete' ? 'keep' : 'delete' } : r
+    );
   }
 
   function formatTime(iso: string): string {
@@ -73,6 +124,8 @@
     void project;
     load();
   });
+
+  let deletionsCount = $derived(cleanupResults.filter(r => r.action === 'delete').length);
 </script>
 
 <div class="context-view">
@@ -87,6 +140,9 @@
       {/if}
     </div>
     <div class="context-actions">
+      <button class="cleanup-btn" onclick={runCleanup} disabled={cleanupRunning || loading}>
+        {cleanupRunning ? 'Analyzing...' : 'AI Cleanup'}
+      </button>
       <div class="view-toggle">
         <button class:active={viewMode === 'structured'} onclick={() => viewMode = 'structured'}>Items</button>
         <button class:active={viewMode === 'raw'} onclick={() => viewMode = 'raw'}>Raw</button>
@@ -96,6 +152,38 @@
       </button>
     </div>
   </div>
+
+  <!-- Cleanup results panel -->
+  {#if cleanupDone && cleanupResults.length > 0}
+    <div class="cleanup-panel">
+      <div class="cleanup-panel-header">
+        <span class="cleanup-panel-title">AI Cleanup Review</span>
+        <span class="cleanup-panel-count">{deletionsCount} to delete, {cleanupResults.length - deletionsCount} to keep</span>
+        <div class="cleanup-panel-actions">
+          <button class="delete-yes" onclick={applyCleanupResults} disabled={cleanupApplying || deletionsCount === 0}>
+            {cleanupApplying ? 'Deleting...' : `Delete ${deletionsCount} items`}
+          </button>
+          <button class="delete-cancel" onclick={() => { cleanupResults = []; cleanupDone = false; cleanupMessage = ''; }}>Dismiss</button>
+        </div>
+      </div>
+      <div class="cleanup-list">
+        {#each cleanupResults as r (r.type + '-' + r.id)}
+          <div class="cleanup-item" class:to-delete={r.action === 'delete'} class:to-keep={r.action === 'keep'}>
+            <button class="cleanup-toggle" onclick={() => toggleCleanupItem(r.id)}>
+              {r.action === 'delete' ? '[-]' : '[+]'}
+            </button>
+            <span class="cleanup-type badge {r.type === 'summary' ? 'summary' : 'raw'}">{r.type}</span>
+            <span class="cleanup-id">#{r.id}</span>
+            <span class="cleanup-reason">{r.reason}</span>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  {#if cleanupMessage && !cleanupDone}
+    <div class="cleanup-message">{cleanupMessage}</div>
+  {/if}
 
   {#if loading}
     <div class="loading"><span class="loading-pulse">Loading context preview...</span></div>

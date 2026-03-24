@@ -867,6 +867,126 @@ a:hover { text-decoration: underline; }
   opacity: 0;
 }
 
+/* Cleanup */
+.cleanup-btn {
+  font-size: 11px;
+  padding: 4px 12px;
+  background: var(--purple);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: var(--font);
+  font-weight: 600;
+  transition: all 0.15s;
+}
+
+.cleanup-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.cleanup-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cleanup-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--purple);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.cleanup-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.cleanup-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--purple);
+}
+
+.cleanup-panel-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: 1;
+}
+
+.cleanup-panel-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.cleanup-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.cleanup-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  transition: all 0.15s;
+}
+
+.cleanup-item.to-delete {
+  background: rgba(248, 81, 73, 0.08);
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--red);
+}
+
+.cleanup-item.to-keep {
+  color: var(--text-muted);
+}
+
+.cleanup-toggle {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 0;
+  min-width: 22px;
+}
+
+.cleanup-item.to-delete .cleanup-toggle {
+  color: var(--red);
+}
+
+.cleanup-item.to-keep .cleanup-toggle {
+  color: var(--green);
+}
+
+.cleanup-id {
+  color: var(--text-dim);
+  min-width: 36px;
+}
+
+.cleanup-reason {
+  flex: 1;
+  color: var(--text-dim);
+}
+
+.cleanup-message {
+  font-size: 11px;
+  color: var(--purple);
+  padding: 8px 0;
+}
+
 /* Settings */
 .settings-form {
   display: flex;

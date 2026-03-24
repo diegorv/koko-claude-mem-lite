@@ -10,7 +10,7 @@ import {
 } from '../db/queries.js';
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext, generateContextDetailed } from '../context/generator.js';
-import { extractObservation, generateSummary } from './summarizer.js';
+import { extractObservation, generateSummary, reviewForCleanup, type CleanupItem } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
@@ -104,12 +104,21 @@ app.post('/api/summarize', async (c) => {
     const session = getSessionByContentId(contentSessionId);
     if (!session) return c.json({ error: 'Session not found' }, 404);
 
-    if (!last_assistant_message) {
-      return c.json({ ok: true, skipped: true, reason: 'no assistant message' });
+    if (!last_assistant_message || last_assistant_message.trim().length < 100) {
+      return c.json({ ok: true, skipped: true, reason: 'no meaningful assistant message' });
     }
 
     const summary = await generateSummary(last_assistant_message);
     if (!summary) return c.json({ ok: true, skipped: true, reason: 'AI summary failed' });
+
+    // Skip summaries that are clearly empty/trivial
+    const hasContent = summary.completed || summary.learned || summary.investigated;
+    const isTrivial = hasContent && /nothing|no .*(finding|change|work|action|interaction)/i.test(
+      [summary.completed, summary.learned, summary.investigated].filter(Boolean).join(' ')
+    );
+    if (!hasContent || isTrivial) {
+      return c.json({ ok: true, skipped: true, reason: 'trivial summary' });
+    }
 
     storeSummary(session.id, session.project, summary);
     return c.json({ ok: true });
@@ -450,5 +459,56 @@ app.put('/api/settings', async (c) => {
   } catch (error) {
     console.error('[routes] PUT /api/settings error:', error);
     return c.json({ error: 'Failed to update settings' }, 500);
+  }
+});
+
+// --- AI Cleanup ---
+
+app.post('/api/cleanup/review', async (c) => {
+  try {
+    const { project } = await c.req.json();
+    const proj = project || 'unknown';
+
+    const summaries = getRecentSummaries(proj, 20);
+    const observations = getRecentObservations(proj, 100);
+
+    const items: CleanupItem[] = [];
+
+    for (const s of summaries) {
+      const parts = [s.request, s.completed, s.learned, s.next_steps].filter(Boolean);
+      items.push({ id: s.id, type: 'summary', text: parts.join(' | ') });
+    }
+
+    for (const o of observations) {
+      const parts = [o.title, o.narrative].filter(Boolean);
+      items.push({ id: o.id, type: 'observation', text: `[${o.type}] ${parts.join(' - ')}` });
+    }
+
+    const results = await reviewForCleanup(items);
+    return c.json({ results, totalReviewed: items.length });
+  } catch (error) {
+    console.error('[routes] /api/cleanup/review error:', error);
+    return c.json({ error: 'Cleanup review failed' }, 500);
+  }
+});
+
+app.post('/api/cleanup/apply', async (c) => {
+  try {
+    const { deletions } = await c.req.json() as { deletions: { id: number; type: 'observation' | 'summary' }[] };
+    if (!Array.isArray(deletions)) return c.json({ error: 'deletions array required' }, 400);
+
+    let deleted = 0;
+    for (const d of deletions) {
+      if (d.type === 'observation') {
+        if (deleteObservation(d.id)) deleted++;
+      } else if (d.type === 'summary') {
+        if (deleteSummary(d.id)) deleted++;
+      }
+    }
+
+    return c.json({ ok: true, deleted });
+  } catch (error) {
+    console.error('[routes] /api/cleanup/apply error:', error);
+    return c.json({ error: 'Cleanup apply failed' }, 500);
   }
 });

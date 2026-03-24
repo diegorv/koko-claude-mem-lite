@@ -143,8 +143,22 @@ async function handleSessionInit(input: ReturnType<typeof normalizeInput>): Prom
   console.log(JSON.stringify(formatSilentOutput()));
 }
 
+// Tools that are meta/tooling noise — not worth persisting as observations
+const IGNORED_TOOLS = new Set([
+  'ToolSearch', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskStop', 'TaskOutput',
+  'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion',
+  'Skill', 'CronCreate', 'CronDelete', 'CronList',
+  'ListMcpResourcesTool', 'ReadMcpResourceTool',
+]);
+
 async function handleObservation(input: ReturnType<typeof normalizeInput>): Promise<void> {
   if (!input.sessionId || !input.toolName) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+
+  // Skip noisy meta-tools
+  if (IGNORED_TOOLS.has(input.toolName)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }

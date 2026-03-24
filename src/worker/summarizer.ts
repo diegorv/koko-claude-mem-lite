@@ -187,3 +187,65 @@ function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + '... [truncated]';
 }
+
+// --- AI Cleanup ---
+
+const CLEANUP_SYSTEM_PROMPT = `You are a memory quality filter. You review a list of stored observations and summaries and decide which ones are LOW VALUE and should be deleted.
+
+Low-value items include:
+- Meta/tooling noise: "Task X updated", "Tool search performed", "Plan mode entered"
+- Empty or trivial: "Nothing was done", "No findings", sessions with no real work
+- Redundant: near-duplicate entries that repeat the same information
+- Generic: observations that contain no specific or actionable information
+
+For each item, output KEEP or DELETE with a brief reason.
+
+Output format (one line per item, in order):
+<decisions>
+<item id="ID">KEEP|DELETE: reason</item>
+</decisions>
+
+Be aggressive about deleting noise. When in doubt about whether something is useful development context, KEEP it. But pure meta-noise should always be DELETED.`;
+
+export interface CleanupItem {
+  id: number;
+  type: 'observation' | 'summary';
+  text: string;
+}
+
+export interface CleanupResult {
+  id: number;
+  type: 'observation' | 'summary';
+  action: 'keep' | 'delete';
+  reason: string;
+}
+
+export async function reviewForCleanup(items: CleanupItem[]): Promise<CleanupResult[]> {
+  if (items.length === 0) return [];
+
+  const itemList = items.map(i =>
+    `[${i.type}#${i.id}] ${i.text}`
+  ).join('\n\n');
+
+  const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
+  if (!text) return [];
+
+  // Parse the decisions
+  const results: CleanupResult[] = [];
+  const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  let match;
+  while ((match = itemRegex.exec(text)) !== null) {
+    const id = parseInt(match[1]);
+    const item = items.find(i => i.id === id);
+    if (item) {
+      results.push({
+        id,
+        type: item.type,
+        action: match[2].toLowerCase() as 'keep' | 'delete',
+        reason: match[3].trim(),
+      });
+    }
+  }
+
+  return results;
+}

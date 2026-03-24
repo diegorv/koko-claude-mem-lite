@@ -273,8 +273,30 @@ async function handleSessionInit(input) {
   });
   console.log(JSON.stringify(formatSilentOutput()));
 }
+var IGNORED_TOOLS = /* @__PURE__ */ new Set([
+  "ToolSearch",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskGet",
+  "TaskList",
+  "TaskStop",
+  "TaskOutput",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "AskUserQuestion",
+  "Skill",
+  "CronCreate",
+  "CronDelete",
+  "CronList",
+  "ListMcpResourcesTool",
+  "ReadMcpResourceTool"
+]);
 async function handleObservation(input) {
   if (!input.sessionId || !input.toolName) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+  if (IGNORED_TOOLS.has(input.toolName)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }

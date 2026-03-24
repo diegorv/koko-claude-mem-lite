@@ -3592,6 +3592,46 @@ function truncate2(str, maxLen) {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + "... [truncated]";
 }
+var CLEANUP_SYSTEM_PROMPT = `You are a memory quality filter. You review a list of stored observations and summaries and decide which ones are LOW VALUE and should be deleted.
+
+Low-value items include:
+- Meta/tooling noise: "Task X updated", "Tool search performed", "Plan mode entered"
+- Empty or trivial: "Nothing was done", "No findings", sessions with no real work
+- Redundant: near-duplicate entries that repeat the same information
+- Generic: observations that contain no specific or actionable information
+
+For each item, output KEEP or DELETE with a brief reason.
+
+Output format (one line per item, in order):
+<decisions>
+<item id="ID">KEEP|DELETE: reason</item>
+</decisions>
+
+Be aggressive about deleting noise. When in doubt about whether something is useful development context, KEEP it. But pure meta-noise should always be DELETED.`;
+async function reviewForCleanup(items) {
+  if (items.length === 0) return [];
+  const itemList = items.map(
+    (i) => `[${i.type}#${i.id}] ${i.text}`
+  ).join("\n\n");
+  const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
+  if (!text) return [];
+  const results = [];
+  const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  let match2;
+  while ((match2 = itemRegex.exec(text)) !== null) {
+    const id = parseInt(match2[1]);
+    const item = items.find((i) => i.id === id);
+    if (item) {
+      results.push({
+        id,
+        type: item.type,
+        action: match2[2].toLowerCase(),
+        reason: match2[3].trim()
+      });
+    }
+  }
+  return results;
+}
 
 // src/utils/privacy.ts
 function stripPrivateTags(content) {
@@ -3729,11 +3769,18 @@ app.post("/api/summarize", async (c) => {
     if (!contentSessionId) return c.json({ error: "contentSessionId required" }, 400);
     const session = getSessionByContentId(contentSessionId);
     if (!session) return c.json({ error: "Session not found" }, 404);
-    if (!last_assistant_message) {
-      return c.json({ ok: true, skipped: true, reason: "no assistant message" });
+    if (!last_assistant_message || last_assistant_message.trim().length < 100) {
+      return c.json({ ok: true, skipped: true, reason: "no meaningful assistant message" });
     }
     const summary = await generateSummary(last_assistant_message);
     if (!summary) return c.json({ ok: true, skipped: true, reason: "AI summary failed" });
+    const hasContent = summary.completed || summary.learned || summary.investigated;
+    const isTrivial = hasContent && /nothing|no .*(finding|change|work|action|interaction)/i.test(
+      [summary.completed, summary.learned, summary.investigated].filter(Boolean).join(" ")
+    );
+    if (!hasContent || isTrivial) {
+      return c.json({ ok: true, skipped: true, reason: "trivial summary" });
+    }
     storeSummary(session.id, session.project, summary);
     return c.json({ ok: true });
   } catch (error) {
@@ -4027,6 +4074,46 @@ app.put("/api/settings", async (c) => {
   } catch (error) {
     console.error("[routes] PUT /api/settings error:", error);
     return c.json({ error: "Failed to update settings" }, 500);
+  }
+});
+app.post("/api/cleanup/review", async (c) => {
+  try {
+    const { project } = await c.req.json();
+    const proj = project || "unknown";
+    const summaries = getRecentSummaries(proj, 20);
+    const observations = getRecentObservations(proj, 100);
+    const items = [];
+    for (const s of summaries) {
+      const parts = [s.request, s.completed, s.learned, s.next_steps].filter(Boolean);
+      items.push({ id: s.id, type: "summary", text: parts.join(" | ") });
+    }
+    for (const o of observations) {
+      const parts = [o.title, o.narrative].filter(Boolean);
+      items.push({ id: o.id, type: "observation", text: `[${o.type}] ${parts.join(" - ")}` });
+    }
+    const results = await reviewForCleanup(items);
+    return c.json({ results, totalReviewed: items.length });
+  } catch (error) {
+    console.error("[routes] /api/cleanup/review error:", error);
+    return c.json({ error: "Cleanup review failed" }, 500);
+  }
+});
+app.post("/api/cleanup/apply", async (c) => {
+  try {
+    const { deletions } = await c.req.json();
+    if (!Array.isArray(deletions)) return c.json({ error: "deletions array required" }, 400);
+    let deleted = 0;
+    for (const d of deletions) {
+      if (d.type === "observation") {
+        if (deleteObservation(d.id)) deleted++;
+      } else if (d.type === "summary") {
+        if (deleteSummary(d.id)) deleted++;
+      }
+    }
+    return c.json({ ok: true, deleted });
+  } catch (error) {
+    console.error("[routes] /api/cleanup/apply error:", error);
+    return c.json({ error: "Cleanup apply failed" }, 500);
   }
 });
 
