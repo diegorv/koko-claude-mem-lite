@@ -64,16 +64,24 @@
     }
   }
 
+  // Set of IDs that have been resolved (have a result)
+  let resolvedIds = $state(new Set<string>());
+
   async function runCleanup() {
     cleanupRunning = true;
     cleanupMessage = '';
     cleanupResults = [];
     pendingItems = [];
+    resolvedIds = new Set();
     cleanupDone = false;
     try {
       await reviewCleanupStream(
         project || undefined,
         (items) => { pendingItems = items; },
+        (result) => {
+          cleanupResults = [...cleanupResults, result];
+          resolvedIds = new Set([...resolvedIds, `${result.type}-${result.id}`]);
+        },
         (results, totalReviewed) => {
           cleanupResults = results;
           pendingItems = [];
@@ -165,21 +173,31 @@
     </div>
   </div>
 
-  <!-- Cleanup: pending items being analyzed -->
+  <!-- Cleanup: pending items being analyzed (with live results) -->
   {#if cleanupRunning && pendingItems.length > 0}
     <div class="cleanup-panel">
       <div class="cleanup-panel-header">
-        <span class="cleanup-panel-title loading-pulse">Analyzing {pendingItems.length} items...</span>
+        <span class="cleanup-panel-title loading-pulse">Analyzing {pendingItems.length} items... ({cleanupResults.length}/{pendingItems.length})</span>
         <span class="cleanup-panel-count">Claude is reviewing each item for quality</span>
       </div>
       <div class="cleanup-list">
         {#each pendingItems as item (item.type + '-' + item.id)}
-          <div class="cleanup-item pending">
-            <span class="cleanup-toggle loading-pulse">[ ]</span>
-            <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : 'raw'}">{item.type}</span>
-            <span class="cleanup-id">#{item.id}</span>
-            <span class="cleanup-reason">{item.text.slice(0, 80)}{item.text.length > 80 ? '...' : ''}</span>
-          </div>
+          {@const result = cleanupResults.find(r => r.id === item.id && r.type === item.type)}
+          {#if result}
+            <div class="cleanup-item" class:to-delete={result.action === 'delete'} class:to-keep={result.action === 'keep'}>
+              <span class="cleanup-toggle">{result.action === 'delete' ? '[-]' : '[+]'}</span>
+              <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : 'raw'}">{item.type}</span>
+              <span class="cleanup-id">#{item.id}</span>
+              <span class="cleanup-reason">{result.reason}</span>
+            </div>
+          {:else}
+            <div class="cleanup-item pending">
+              <span class="cleanup-toggle loading-pulse">[ ]</span>
+              <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : 'raw'}">{item.type}</span>
+              <span class="cleanup-id">#{item.id}</span>
+              <span class="cleanup-reason">{item.text.slice(0, 80)}{item.text.length > 80 ? '...' : ''}</span>
+            </div>
+          {/if}
         {/each}
       </div>
     </div>

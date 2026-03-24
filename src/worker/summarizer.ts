@@ -254,15 +254,13 @@ function parseCleanupResults(text: string, items: CleanupItem[]): CleanupResult[
 
 /**
  * Streaming cleanup: yields partial results as the AI generates them.
- * Uses Server-Sent Events format.
+ * Uses includePartialMessages to get token-level streaming from the Agent SDK.
  */
-export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenerator<{ type: 'progress' | 'result' | 'done'; data: any }> {
+export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenerator<{ type: 'result' | 'done'; data: any }> {
   if (items.length === 0) {
-    yield { type: 'done', data: { results: [] } };
+    yield { type: 'done', data: { results: [], totalReviewed: 0 } };
     return;
   }
-
-  yield { type: 'progress', data: { message: `Reviewing ${items.length} items...`, phase: 'starting' } };
 
   const itemList = items.map(i =>
     `[${i.type}#${i.id}] ${i.text}`
@@ -277,6 +275,7 @@ export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenera
         maxTurns: 1,
         tools: [],
         disallowedTools: ['*'],
+        includePartialMessages: true,
       },
     });
 
@@ -284,24 +283,24 @@ export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenera
     let lastParsedCount = 0;
 
     for await (const message of conversation) {
-      if (message.type === 'assistant' && message.message?.content) {
-        for (const block of message.message.content) {
-          if (block.type === 'text') {
-            fullText = block.text;
-            // Parse what we have so far and yield new results
-            const partialResults = parseCleanupResults(fullText, items);
-            if (partialResults.length > lastParsedCount) {
-              for (let i = lastParsedCount; i < partialResults.length; i++) {
-                yield { type: 'result', data: partialResults[i] };
-              }
-              lastParsedCount = partialResults.length;
-              yield { type: 'progress', data: { message: `${lastParsedCount}/${items.length} reviewed`, phase: 'analyzing' } };
+      // Token-level streaming events
+      if (message.type === 'stream_event') {
+        const event = (message as any).event;
+        if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+          fullText += event.delta.text;
+          // Try to parse new complete items from accumulated text
+          const partialResults = parseCleanupResults(fullText, items);
+          if (partialResults.length > lastParsedCount) {
+            for (let i = lastParsedCount; i < partialResults.length; i++) {
+              yield { type: 'result', data: partialResults[i] };
             }
+            lastParsedCount = partialResults.length;
           }
         }
       }
-      if (message.type === 'result' && message.subtype === 'success') {
-        fullText = message.result;
+      // Final result
+      if (message.type === 'result' && (message as any).subtype === 'success') {
+        fullText = (message as any).result || fullText;
       }
     }
 

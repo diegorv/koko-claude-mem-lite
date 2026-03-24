@@ -10,7 +10,7 @@ import {
 } from '../db/queries.js';
 import { formatSearchIndex, formatTimeline, formatObservationsFull } from './formatter.js';
 import { generateContext, generateContextDetailed } from '../context/generator.js';
-import { extractObservation, generateSummary, reviewForCleanup, type CleanupItem } from './summarizer.js';
+import { extractObservation, generateSummary, reviewForCleanupStream, type CleanupItem } from './summarizer.js';
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
@@ -484,7 +484,7 @@ app.post('/api/cleanup/review', async (c) => {
       items.push({ id: o.id, type: 'observation', text: `[${o.type}] ${parts.join(' - ')}` });
     }
 
-    // SSE: send items list immediately, then AI results when ready
+    // SSE: send items list immediately, then stream results as AI generates them
     return new Response(
       new ReadableStream({
         async start(controller) {
@@ -497,8 +497,9 @@ app.post('/api/cleanup/review', async (c) => {
           send('items', { items: items.map(i => ({ id: i.id, type: i.type, text: i.text })) });
 
           try {
-            const results = await reviewForCleanup(items);
-            send('done', { results, totalReviewed: items.length });
+            for await (const chunk of reviewForCleanupStream(items)) {
+              send(chunk.type, chunk.data);
+            }
           } catch (err) {
             send('done', { results: [], error: 'Cleanup failed' });
           }

@@ -179,6 +179,7 @@ export interface PendingItem {
 export async function reviewCleanupStream(
   project: string | undefined,
   onItems: (items: PendingItem[]) => void,
+  onResult: (result: CleanupResult) => void,
   onDone: (results: CleanupResult[], totalReviewed: number) => void,
 ): Promise<void> {
   const res = await fetch(`${BASE}/api/cleanup/review`, {
@@ -210,6 +211,8 @@ export async function reviewCleanupStream(
           const data = JSON.parse(line.slice(6));
           if (currentEvent === 'items') {
             onItems(data.items);
+          } else if (currentEvent === 'result') {
+            onResult(data);
           } else if (currentEvent === 'done') {
             onDone(data.results || [], data.totalReviewed || 0);
           }
