@@ -3667,6 +3667,7 @@ async function* reviewForCleanupStream(items) {
   const itemList = items.map(
     (i) => `[${i.type}#${i.id}] ${i.text}`
   ).join("\n\n");
+  console.log(`[cleanup] Starting streaming review of ${items.length} items`);
   try {
     const conversation = query({
       prompt: itemList,
@@ -3681,25 +3682,56 @@ async function* reviewForCleanupStream(items) {
     });
     let fullText = "";
     let lastParsedCount = 0;
+    let messageCount = 0;
     for await (const message of conversation) {
-      if (message.type === "stream_event") {
+      messageCount++;
+      const msgType = message.type;
+      const msgSubtype = message.subtype;
+      if (messageCount <= 20) {
+        console.log(`[cleanup] Message #${messageCount}: type=${msgType} subtype=${msgSubtype}`);
+      }
+      if (msgType === "stream_event") {
         const event = message.event;
         if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
           fullText += event.delta.text;
           const partialResults = parseCleanupResults(fullText, items);
           if (partialResults.length > lastParsedCount) {
             for (let i = lastParsedCount; i < partialResults.length; i++) {
+              console.log(`[cleanup] Yielding result: ${partialResults[i].action} #${partialResults[i].id}`);
               yield { type: "result", data: partialResults[i] };
             }
             lastParsedCount = partialResults.length;
           }
         }
       }
-      if (message.type === "result" && message.subtype === "success") {
-        fullText = message.result || fullText;
+      if (msgType === "assistant" && message.message?.content) {
+        for (const block of message.message.content) {
+          if (block.type === "text" && block.text) {
+            console.log(`[cleanup] Got assistant text block (${block.text.length} chars)`);
+            fullText = block.text;
+            const partialResults = parseCleanupResults(fullText, items);
+            if (partialResults.length > lastParsedCount) {
+              for (let i = lastParsedCount; i < partialResults.length; i++) {
+                console.log(`[cleanup] Yielding result (from assistant): ${partialResults[i].action} #${partialResults[i].id}`);
+                yield { type: "result", data: partialResults[i] };
+              }
+              lastParsedCount = partialResults.length;
+            }
+          }
+        }
+      }
+      if (msgType === "result") {
+        if (msgSubtype === "success") {
+          fullText = message.result || fullText;
+          console.log(`[cleanup] Got final result (${fullText.length} chars)`);
+        } else {
+          console.error(`[cleanup] Result with subtype=${msgSubtype}:`, message.error || "unknown error");
+        }
       }
     }
+    console.log(`[cleanup] Stream ended after ${messageCount} messages, fullText=${fullText.length} chars`);
     const finalResults = parseCleanupResults(fullText, items);
+    console.log(`[cleanup] Final parse: ${finalResults.length} results from ${items.length} items`);
     if (finalResults.length > lastParsedCount) {
       for (let i = lastParsedCount; i < finalResults.length; i++) {
         yield { type: "result", data: finalResults[i] };
@@ -3707,8 +3739,8 @@ async function* reviewForCleanupStream(items) {
     }
     yield { type: "done", data: { results: finalResults, totalReviewed: items.length } };
   } catch (error) {
-    console.error("[summarizer] Streaming cleanup failed:", error);
-    yield { type: "done", data: { results: [], error: "Cleanup failed" } };
+    console.error("[cleanup] Streaming cleanup failed:", error);
+    yield { type: "done", data: { results: [], error: String(error) } };
   }
 }
 

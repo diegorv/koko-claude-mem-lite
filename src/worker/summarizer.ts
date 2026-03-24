@@ -299,6 +299,8 @@ export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenera
     `[${i.type}#${i.id}] ${i.text}`
   ).join('\n\n');
 
+  console.log(`[cleanup] Starting streaming review of ${items.length} items`);
+
   try {
     const conversation = query({
       prompt: itemList,
@@ -314,31 +316,69 @@ export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenera
 
     let fullText = '';
     let lastParsedCount = 0;
+    let messageCount = 0;
 
     for await (const message of conversation) {
+      messageCount++;
+      const msgType = (message as any).type;
+      const msgSubtype = (message as any).subtype;
+
+      // Log every message type we see (first 20 only to avoid spam)
+      if (messageCount <= 20) {
+        console.log(`[cleanup] Message #${messageCount}: type=${msgType} subtype=${msgSubtype}`);
+      }
+
       // Token-level streaming events
-      if (message.type === 'stream_event') {
+      if (msgType === 'stream_event') {
         const event = (message as any).event;
         if (event?.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
           fullText += event.delta.text;
-          // Try to parse new complete items from accumulated text
           const partialResults = parseCleanupResults(fullText, items);
           if (partialResults.length > lastParsedCount) {
             for (let i = lastParsedCount; i < partialResults.length; i++) {
+              console.log(`[cleanup] Yielding result: ${partialResults[i].action} #${partialResults[i].id}`);
               yield { type: 'result', data: partialResults[i] };
             }
             lastParsedCount = partialResults.length;
           }
         }
       }
+
+      // Also check for assistant messages with content (non-streaming fallback)
+      if (msgType === 'assistant' && (message as any).message?.content) {
+        for (const block of (message as any).message.content) {
+          if (block.type === 'text' && block.text) {
+            console.log(`[cleanup] Got assistant text block (${block.text.length} chars)`);
+            fullText = block.text;
+            const partialResults = parseCleanupResults(fullText, items);
+            if (partialResults.length > lastParsedCount) {
+              for (let i = lastParsedCount; i < partialResults.length; i++) {
+                console.log(`[cleanup] Yielding result (from assistant): ${partialResults[i].action} #${partialResults[i].id}`);
+                yield { type: 'result', data: partialResults[i] };
+              }
+              lastParsedCount = partialResults.length;
+            }
+          }
+        }
+      }
+
       // Final result
-      if (message.type === 'result' && (message as any).subtype === 'success') {
-        fullText = (message as any).result || fullText;
+      if (msgType === 'result') {
+        if (msgSubtype === 'success') {
+          fullText = (message as any).result || fullText;
+          console.log(`[cleanup] Got final result (${fullText.length} chars)`);
+        } else {
+          console.error(`[cleanup] Result with subtype=${msgSubtype}:`, (message as any).error || 'unknown error');
+        }
       }
     }
 
-    // Final parse to catch anything missed
+    console.log(`[cleanup] Stream ended after ${messageCount} messages, fullText=${fullText.length} chars`);
+
+    // Final parse
     const finalResults = parseCleanupResults(fullText, items);
+    console.log(`[cleanup] Final parse: ${finalResults.length} results from ${items.length} items`);
+
     if (finalResults.length > lastParsedCount) {
       for (let i = lastParsedCount; i < finalResults.length; i++) {
         yield { type: 'result', data: finalResults[i] };
@@ -347,7 +387,7 @@ export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenera
 
     yield { type: 'done', data: { results: finalResults, totalReviewed: items.length } };
   } catch (error) {
-    console.error('[summarizer] Streaming cleanup failed:', error);
-    yield { type: 'done', data: { results: [], error: 'Cleanup failed' } };
+    console.error('[cleanup] Streaming cleanup failed:', error);
+    yield { type: 'done', data: { results: [], error: String(error) } };
   }
 }

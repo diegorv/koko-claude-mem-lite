@@ -83,11 +83,17 @@
           resolvedIds = new Set([...resolvedIds, `${result.type}-${result.id}`]);
         },
         (results, totalReviewed) => {
-          cleanupResults = results;
+          if (results.length > 0) {
+            cleanupResults = results;
+          }
           pendingItems = [];
           cleanupDone = true;
-          const toDelete = results.filter(r => r.action === 'delete');
-          cleanupMessage = `Reviewed ${totalReviewed} items. ${toDelete.length} flagged for deletion.`;
+          if (cleanupResults.length === 0) {
+            cleanupMessage = 'Cleanup failed — no results returned. Check worker logs for errors.';
+          } else {
+            const toDelete = cleanupResults.filter(r => r.action === 'delete');
+            cleanupMessage = `Reviewed ${totalReviewed} items. ${toDelete.length} flagged for deletion.`;
+          }
         },
       );
     } catch (err) {
@@ -247,7 +253,7 @@
     <div class="cleanup-success">{deletedMessage}</div>
   {/if}
 
-  {#if cleanupMessage && !cleanupDone}
+  {#if cleanupMessage && (cleanupDone && cleanupResults.length === 0 || !cleanupDone)}
     <div class="cleanup-message">{cleanupMessage}</div>
   {/if}
 
