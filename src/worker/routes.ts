@@ -15,7 +15,7 @@ import { getOrCreateObserver, getObserver, destroyObserver } from './observer.js
 import { stripPrivateTags, isEntirelyPrivate } from '../utils/privacy.js';
 import { getSetting, getAllSettings, updateSettings } from '../utils/settings.js';
 import { embedObservation, searchSemantic } from '../embeddings/embeddings.js';
-import { getDb } from '../db/database.js';
+import { getDb, isDbReady } from '../db/database.js';
 
 export const app = new Hono();
 
@@ -27,8 +27,16 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-// Health check
+// Health check (liveness — responds if server is up)
 app.get('/api/health', (c) => c.json({ ok: true }));
+
+// Readiness check (DB fully initialized)
+app.get('/api/readiness', (c) => {
+  if (!isDbReady()) {
+    return c.json({ ok: false, reason: 'DB not initialized' }, 503);
+  }
+  return c.json({ ok: true });
+});
 
 // Context injection for SessionStart
 app.get('/api/context', (c) => {

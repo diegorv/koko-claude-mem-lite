@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { app } from './routes.js';
 import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
-import { closeDb } from '../db/database.js';
+import { closeDb, getDb } from '../db/database.js';
 import { destroyAllObservers } from './observer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -93,6 +93,7 @@ const alreadyRunning = await checkExistingWorker();
 if (alreadyRunning) process.exit(0);
 
 writePid();
+getDb(); // Eagerly initialize DB so /api/readiness becomes true before first request
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
   console.log(`[worker] Memory-lite worker running on http://127.0.0.1:${port}`);

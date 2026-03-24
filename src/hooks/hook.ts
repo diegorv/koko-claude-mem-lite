@@ -47,6 +47,20 @@ async function waitForHealth(timeoutMs: number): Promise<boolean> {
   return false;
 }
 
+async function waitForReadiness(timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`${WORKER_BASE}/api/readiness`, { signal: AbortSignal.timeout(1000) });
+      if (res.ok) return true;
+    } catch {
+      // not ready yet
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
 function ensureDeps(pluginRoot: string): boolean {
   if (existsSync(join(pluginRoot, 'node_modules', 'better-sqlite3'))) return true;
   try {
@@ -104,8 +118,8 @@ async function handleStart(): Promise<void> {
     return;
   }
 
-  // Wait for worker to become healthy (poll, don't blindly sleep)
-  const healthy = await waitForHealth(10_000);
+  // Wait for worker to be fully ready (DB initialized, not just listening)
+  const healthy = await waitForReadiness(10_000);
   if (!healthy) {
     console.error('[memory-lite] Worker spawned but health check timed out');
   }

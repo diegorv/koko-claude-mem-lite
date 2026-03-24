@@ -5,6 +5,11 @@ import { getDbPath, getDataDir } from '../utils/paths.js';
 export type { Database };
 
 let db: Database.Database | null = null;
+let dbReady = false;
+
+export function isDbReady(): boolean {
+  return dbReady;
+}
 
 const SCHEMA_VERSION = 2;
 
@@ -152,6 +157,7 @@ export function getDb(): Database.Database {
   db = new Database(getDbPath());
   initializeSchema(db);
   tryLoadSqliteVec(db);
+  dbReady = true;
   return db;
 }
 
@@ -159,5 +165,6 @@ export function closeDb(): void {
   if (db) {
     db.close();
     db = null;
+    dbReady = false;
   }
 }
