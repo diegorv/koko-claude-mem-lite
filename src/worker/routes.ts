@@ -19,6 +19,14 @@ import { getDb } from '../db/database.js';
 
 export const app = new Hono();
 
+const MAX_LIMIT = 500;
+const MAX_DEPTH = 50;
+const MAX_BATCH = 100;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 // Health check
 app.get('/api/health', (c) => c.json({ ok: true }));
 
@@ -168,8 +176,8 @@ app.post('/api/sessions/complete', async (c) => {
 app.get('/api/dashboard/sessions', (c) => {
   try {
     const project = c.req.query('project');
-    const limit = parseInt(c.req.query('limit') || '50');
-    const offset = parseInt(c.req.query('offset') || '0');
+    const limit = clamp(parseInt(c.req.query('limit') || '50'), 1, MAX_LIMIT);
+    const offset = Math.max(0, parseInt(c.req.query('offset') || '0'));
     const db = getDb();
 
     const whereClause = project ? 'WHERE s.project = ?' : '';
@@ -272,7 +280,7 @@ app.get('/api/dashboard/stats', (c) => {
 app.get('/api/dashboard/feed', (c) => {
   try {
     const project = c.req.query('project');
-    const limit = parseInt(c.req.query('limit') || '30');
+    const limit = clamp(parseInt(c.req.query('limit') || '30'), 1, MAX_LIMIT);
     const before = c.req.query('before');
     const db = getDb();
 
@@ -330,8 +338,8 @@ app.get('/api/search/index', (c) => {
       type: c.req.query('type'),
       dateStart: c.req.query('dateStart'),
       dateEnd: c.req.query('dateEnd'),
-      limit: parseInt(c.req.query('limit') || '20'),
-      offset: parseInt(c.req.query('offset') || '0'),
+      limit: clamp(parseInt(c.req.query('limit') || '20'), 1, MAX_LIMIT),
+      offset: Math.max(0, parseInt(c.req.query('offset') || '0')),
     });
 
     const formatted = formatSearchIndex(results);
@@ -347,8 +355,8 @@ app.get('/api/timeline', (c) => {
     const anchorId = parseInt(c.req.query('anchor') || '');
     if (isNaN(anchorId)) return c.json({ error: 'anchor parameter required (observation ID)' }, 400);
 
-    const depthBefore = parseInt(c.req.query('depth_before') || '5');
-    const depthAfter = parseInt(c.req.query('depth_after') || '5');
+    const depthBefore = clamp(parseInt(c.req.query('depth_before') || '5'), 1, MAX_DEPTH);
+    const depthAfter = clamp(parseInt(c.req.query('depth_after') || '5'), 1, MAX_DEPTH);
     const project = c.req.query('project');
 
     const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
@@ -368,6 +376,9 @@ app.post('/api/observations/batch', async (c) => {
     if (!Array.isArray(ids) || ids.length === 0) {
       return c.json({ error: 'ids array required' }, 400);
     }
+    if (ids.length > MAX_BATCH) {
+      return c.json({ error: `Too many IDs (max ${MAX_BATCH})` }, 400);
+    }
 
     const observations = getObservationsByIds(ids.map(Number));
     const formatted = formatObservationsFull(observations);
@@ -383,7 +394,7 @@ app.get('/api/search', async (c) => {
     const q = c.req.query('q');
     const project = c.req.query('project');
     const mode = c.req.query('mode') || 'fts';
-    const limit = parseInt(c.req.query('limit') || '10');
+    const limit = clamp(parseInt(c.req.query('limit') || '10'), 1, MAX_LIMIT);
 
     if (!q) return c.json({ error: 'q parameter required' }, 400);
 
