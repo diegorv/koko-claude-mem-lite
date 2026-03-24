@@ -190,13 +190,13 @@ app.get('/api/dashboard/sessions', (c) => {
     const sessions = db.prepare(`
       SELECT s.*,
         (SELECT COUNT(*) FROM observations o WHERE o.session_id = s.id) as observation_count,
-        json_object(
+        CASE WHEN sm.id IS NOT NULL THEN json_object(
           'request', sm.request,
           'investigated', sm.investigated,
           'learned', sm.learned,
           'completed', sm.completed,
           'next_steps', sm.next_steps
-        ) as summary
+        ) ELSE NULL END as summary
       FROM sessions s
       LEFT JOIN summaries sm ON sm.session_id = s.id
       ${whereClause}
