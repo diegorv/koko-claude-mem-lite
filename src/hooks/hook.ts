@@ -8,11 +8,12 @@ import { normalizeInput, formatContextOutput, formatSilentOutput } from './adapt
 import { stripPrivateTags } from '../utils/privacy.js';
 import { getProjectName } from '../utils/paths.js';
 import { getSetting } from '../utils/settings.js';
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { spawn, execSync } from 'child_process';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
 
@@ -86,6 +87,22 @@ async function handleStart(): Promise<void> {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
+
+  // Anti-spawn-storm: if PID file is recent, another session is already spawning
+  const pidPath = join(homedir(), '.memory-lite', 'worker.pid');
+  try {
+    if (existsSync(pidPath)) {
+      const ageMs = Date.now() - statSync(pidPath).mtimeMs;
+      if (ageMs < 15_000) {
+        console.error('[memory-lite] PID file is recent (<15s), waiting for existing spawn...');
+        if (await waitForReadiness(15_000)) {
+          console.log(JSON.stringify(formatSilentOutput()));
+          return;
+        }
+        console.error('[memory-lite] Existing spawn seems to have failed, attempting new spawn');
+      }
+    }
+  } catch { /* ignore PID file read errors */ }
 
   const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || join(dirname(fileURLToPath(import.meta.url)), '..');
   const workerScript = join(pluginRoot, 'scripts', 'worker.mjs');
