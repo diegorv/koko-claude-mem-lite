@@ -170,14 +170,54 @@ export interface CleanupResult {
   reason: string;
 }
 
-export async function reviewCleanup(project?: string): Promise<{ results: CleanupResult[]; totalReviewed: number }> {
+export interface PendingItem {
+  id: number;
+  type: 'observation' | 'summary';
+  text: string;
+}
+
+export async function reviewCleanupStream(
+  project: string | undefined,
+  onItems: (items: PendingItem[]) => void,
+  onDone: (results: CleanupResult[], totalReviewed: number) => void,
+): Promise<void> {
   const res = await fetch(`${BASE}/api/cleanup/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project }),
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  if (!res.body) throw new Error('No response body');
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    let currentEvent = '';
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7);
+      } else if (line.startsWith('data: ') && currentEvent) {
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (currentEvent === 'items') {
+            onItems(data.items);
+          } else if (currentEvent === 'done') {
+            onDone(data.results || [], data.totalReviewed || 0);
+          }
+        } catch {}
+        currentEvent = '';
+      }
+    }
+  }
 }
 
 export async function applyCleanup(deletions: { id: number; type: 'observation' | 'summary' }[]): Promise<{ ok: boolean; deleted: number }> {

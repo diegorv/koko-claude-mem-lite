@@ -484,8 +484,36 @@ app.post('/api/cleanup/review', async (c) => {
       items.push({ id: o.id, type: 'observation', text: `[${o.type}] ${parts.join(' - ')}` });
     }
 
-    const results = await reviewForCleanup(items);
-    return c.json({ results, totalReviewed: items.length });
+    // SSE: send items list immediately, then AI results when ready
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          const send = (event: string, data: any) => {
+            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          };
+
+          // Immediately send the items being reviewed so UI can show them as "pending"
+          send('items', { items: items.map(i => ({ id: i.id, type: i.type, text: i.text })) });
+
+          try {
+            const results = await reviewForCleanup(items);
+            send('done', { results, totalReviewed: items.length });
+          } catch (err) {
+            send('done', { results: [], error: 'Cleanup failed' });
+          }
+
+          controller.close();
+        }
+      }),
+      {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      }
+    );
   } catch (error) {
     console.error('[routes] /api/cleanup/review error:', error);
     return c.json({ error: 'Cleanup review failed' }, 500);

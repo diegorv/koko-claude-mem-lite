@@ -230,7 +230,10 @@ export async function reviewForCleanup(items: CleanupItem[]): Promise<CleanupRes
   const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
   if (!text) return [];
 
-  // Parse the decisions
+  return parseCleanupResults(text, items);
+}
+
+function parseCleanupResults(text: string, items: CleanupItem[]): CleanupResult[] {
   const results: CleanupResult[] = [];
   const itemRegex = /<item id="(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
   let match;
@@ -246,6 +249,73 @@ export async function reviewForCleanup(items: CleanupItem[]): Promise<CleanupRes
       });
     }
   }
-
   return results;
+}
+
+/**
+ * Streaming cleanup: yields partial results as the AI generates them.
+ * Uses Server-Sent Events format.
+ */
+export async function* reviewForCleanupStream(items: CleanupItem[]): AsyncGenerator<{ type: 'progress' | 'result' | 'done'; data: any }> {
+  if (items.length === 0) {
+    yield { type: 'done', data: { results: [] } };
+    return;
+  }
+
+  yield { type: 'progress', data: { message: `Reviewing ${items.length} items...`, phase: 'starting' } };
+
+  const itemList = items.map(i =>
+    `[${i.type}#${i.id}] ${i.text}`
+  ).join('\n\n');
+
+  try {
+    const conversation = query({
+      prompt: itemList,
+      options: {
+        model: 'claude-sonnet-4-6',
+        systemPrompt: CLEANUP_SYSTEM_PROMPT,
+        maxTurns: 1,
+        tools: [],
+        disallowedTools: ['*'],
+      },
+    });
+
+    let fullText = '';
+    let lastParsedCount = 0;
+
+    for await (const message of conversation) {
+      if (message.type === 'assistant' && message.message?.content) {
+        for (const block of message.message.content) {
+          if (block.type === 'text') {
+            fullText = block.text;
+            // Parse what we have so far and yield new results
+            const partialResults = parseCleanupResults(fullText, items);
+            if (partialResults.length > lastParsedCount) {
+              for (let i = lastParsedCount; i < partialResults.length; i++) {
+                yield { type: 'result', data: partialResults[i] };
+              }
+              lastParsedCount = partialResults.length;
+              yield { type: 'progress', data: { message: `${lastParsedCount}/${items.length} reviewed`, phase: 'analyzing' } };
+            }
+          }
+        }
+      }
+      if (message.type === 'result' && message.subtype === 'success') {
+        fullText = message.result;
+      }
+    }
+
+    // Final parse to catch anything missed
+    const finalResults = parseCleanupResults(fullText, items);
+    if (finalResults.length > lastParsedCount) {
+      for (let i = lastParsedCount; i < finalResults.length; i++) {
+        yield { type: 'result', data: finalResults[i] };
+      }
+    }
+
+    yield { type: 'done', data: { results: finalResults, totalReviewed: items.length } };
+  } catch (error) {
+    console.error('[summarizer] Streaming cleanup failed:', error);
+    yield { type: 'done', data: { results: [], error: 'Cleanup failed' } };
+  }
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContextPreview, deleteObservation, deleteSummary, reviewCleanup, applyCleanup, type ContextBreakdown, type CleanupResult } from '../api';
+  import { getContextPreview, deleteObservation, deleteSummary, reviewCleanupStream, applyCleanup, type ContextBreakdown, type CleanupResult, type PendingItem } from '../api';
 
   let { project = '' }: { project?: string } = $props();
 
@@ -63,19 +63,27 @@
     }
   }
 
+  let cleanupProgress = $state('');
+
   async function runCleanup() {
     cleanupRunning = true;
     cleanupMessage = '';
+    cleanupProgress = 'Starting analysis...';
     cleanupResults = [];
     cleanupDone = false;
     try {
-      const res = await reviewCleanup(project || undefined);
-      cleanupResults = res.results;
+      const res = await reviewCleanupStream(
+        project || undefined,
+        (msg) => { cleanupProgress = msg; },
+        (result) => { cleanupResults = [...cleanupResults, result]; },
+      );
       cleanupDone = true;
-      const toDelete = res.results.filter(r => r.action === 'delete');
+      const toDelete = cleanupResults.filter(r => r.action === 'delete');
       cleanupMessage = `Reviewed ${res.totalReviewed} items. ${toDelete.length} flagged for deletion.`;
+      cleanupProgress = '';
     } catch (err) {
       cleanupMessage = 'Cleanup review failed. Is Claude Agent SDK available?';
+      cleanupProgress = '';
       console.error(err);
     } finally {
       cleanupRunning = false;
@@ -140,8 +148,12 @@
       {/if}
     </div>
     <div class="context-actions">
-      <button class="cleanup-btn" onclick={runCleanup} disabled={cleanupRunning || loading}>
-        {cleanupRunning ? 'Analyzing...' : 'AI Cleanup'}
+      <button class="cleanup-btn" class:active={cleanupRunning} onclick={runCleanup} disabled={cleanupRunning || loading}>
+        {#if cleanupRunning}
+          <span class="loading-pulse">Analyzing ({cleanupResults.length})...</span>
+        {:else}
+          AI Cleanup
+        {/if}
       </button>
       <div class="view-toggle">
         <button class:active={viewMode === 'structured'} onclick={() => viewMode = 'structured'}>Items</button>
@@ -153,7 +165,30 @@
     </div>
   </div>
 
-  <!-- Cleanup results panel -->
+  <!-- Cleanup live progress -->
+  {#if cleanupRunning}
+    <div class="cleanup-panel">
+      <div class="cleanup-panel-header">
+        <span class="cleanup-panel-title loading-pulse">Analyzing...</span>
+        <span class="cleanup-panel-count">{cleanupProgress}</span>
+      </div>
+      {#if cleanupResults.length > 0}
+        <div class="cleanup-list">
+          {#each cleanupResults as r (r.type + '-' + r.id)}
+            <div class="cleanup-item" class:to-delete={r.action === 'delete'} class:to-keep={r.action === 'keep'}>
+              <span class="cleanup-toggle">{r.action === 'delete' ? '[-]' : '[+]'}</span>
+              <span class="cleanup-type badge {r.type === 'summary' ? 'summary' : 'raw'}">{r.type}</span>
+              <span class="cleanup-id">#{r.id}</span>
+              <span class="cleanup-reason">{r.reason}</span>
+            </div>
+          {/each}
+          <div class="cleanup-item loading-pulse" style="color: var(--text-dim); justify-content: center;">analyzing next item...</div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Cleanup results panel (after done) -->
   {#if cleanupDone && cleanupResults.length > 0}
     <div class="cleanup-panel">
       <div class="cleanup-panel-header">
