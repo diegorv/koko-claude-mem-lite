@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSessions, getSessionObservations, type Session, type Observation } from '../api';
+  import { getSessions, getSessionObservations, deleteSession, type Session, type Observation } from '../api';
   import FeedItemComponent from './FeedItem.svelte';
 
   let { project = '' }: { project?: string } = $props();
@@ -10,6 +10,26 @@
   let selectedSession: Session | null = $state(null);
   let observations: Observation[] = $state([]);
   let loadingObs = $state(false);
+  let confirmDeleteId: number | null = $state(null);
+  let deletingSession = $state(false);
+
+  async function handleDeleteSession(id: number) {
+    deletingSession = true;
+    try {
+      await deleteSession(id);
+      sessions = sessions.filter(s => s.id !== id);
+      total--;
+      if (selectedSession?.id === id) {
+        selectedSession = null;
+        observations = [];
+      }
+    } catch (err) {
+      console.error('Delete session failed:', err);
+    } finally {
+      deletingSession = false;
+      confirmDeleteId = null;
+    }
+  }
 
   async function loadSessions() {
     loading = true;
@@ -57,7 +77,18 @@
 {#if selectedSession}
   {@const sum = parseSummary(selectedSession.summary)}
   <div class="session-detail">
-    <button class="back" onclick={goBack}>&larr; Back to sessions</button>
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+      <button class="back" onclick={goBack} style="margin-bottom: 0;">&larr; Back to sessions</button>
+      {#if confirmDeleteId === selectedSession.id}
+        <span class="delete-confirm">
+          <span class="delete-confirm-text">Delete session + all data?</span>
+          <button class="delete-yes" onclick={() => handleDeleteSession(selectedSession!.id)} disabled={deletingSession}>{deletingSession ? '...' : 'Yes'}</button>
+          <button class="delete-cancel" onclick={() => confirmDeleteId = null}>No</button>
+        </span>
+      {:else}
+        <button class="delete-btn-text" onclick={() => confirmDeleteId = selectedSession!.id}>Delete session</button>
+      {/if}
+    </div>
 
     <div class="session-info">
       <h2>
@@ -129,17 +160,27 @@
     <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 8px;">{total} sessions</div>
     <div class="session-list">
       {#each sessions as session}
-        <button class="session-row" onclick={() => selectSession(session)}>
-          <span class="session-id">#{session.id}</span>
-          <span class="status-dot {session.status}"></span>
-          <span class="session-prompt">
-            {session.user_prompt || 'No prompt recorded'}
-          </span>
-          <div class="session-meta">
-            <span class="obs-count">{session.observation_count} obs</span>
-            <span>{formatTime(session.created_at)}</span>
-          </div>
-        </button>
+        <div class="session-row-wrapper">
+          <button class="session-row" onclick={() => selectSession(session)}>
+            <span class="session-id">#{session.id}</span>
+            <span class="status-dot {session.status}"></span>
+            <span class="session-prompt">
+              {session.user_prompt || 'No prompt recorded'}
+            </span>
+            <div class="session-meta">
+              <span class="obs-count">{session.observation_count} obs</span>
+              <span>{formatTime(session.created_at)}</span>
+            </div>
+          </button>
+          {#if confirmDeleteId === session.id}
+            <span class="delete-confirm">
+              <button class="delete-yes" onclick={() => handleDeleteSession(session.id)} disabled={deletingSession}>{deletingSession ? '...' : 'Yes'}</button>
+              <button class="delete-cancel" onclick={() => confirmDeleteId = null}>No</button>
+            </span>
+          {:else}
+            <button class="delete-btn" title="Delete session" onclick={() => confirmDeleteId = session.id}>&#x2715;</button>
+          {/if}
+        </div>
       {/each}
     </div>
   {/if}

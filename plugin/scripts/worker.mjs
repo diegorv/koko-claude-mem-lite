@@ -3143,6 +3143,28 @@ function getObservationsByIds(ids) {
     `SELECT * FROM observations WHERE id IN (${placeholders}) ORDER BY created_at_epoch ASC`
   ).all(...ids);
 }
+function deleteObservation(id) {
+  const db2 = getDb();
+  try {
+    db2.prepare("DELETE FROM observations_vec WHERE observation_id = ?").run(id);
+  } catch {
+  }
+  const result = db2.prepare("DELETE FROM observations WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+function deleteSummary(id) {
+  const result = getDb().prepare("DELETE FROM summaries WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+function deleteSession(id) {
+  const db2 = getDb();
+  try {
+    db2.prepare("DELETE FROM observations_vec WHERE observation_id IN (SELECT id FROM observations WHERE session_id = ?)").run(id);
+  } catch {
+  }
+  const result = db2.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+  return result.changes > 0;
+}
 function getTimelineAroundObservation(anchorId, depthBefore = 5, depthAfter = 5, project) {
   const db2 = getDb();
   const anchor = db2.prepare("SELECT * FROM observations WHERE id = ?").get(anchorId);
@@ -3318,6 +3340,17 @@ function getSetting(key) {
     return envVal;
   }
   return getSettings()[key];
+}
+function getAllSettings() {
+  return { ...getSettings() };
+}
+function updateSettings(partial) {
+  const current = getSettings();
+  const updated = { ...current, ...partial };
+  const path = getSettingsPath();
+  writeFileSync(path, JSON.stringify(updated, null, 2));
+  cached = updated;
+  return updated;
 }
 
 // src/context/generator.ts
@@ -3914,6 +3947,71 @@ app.get("/api/search", async (c) => {
   } catch (error) {
     console.error("[routes] /api/search error:", error);
     return c.json({ error: "Search failed" }, 500);
+  }
+});
+app.delete("/api/observations/:id", (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
+    const deleted = deleteObservation(id);
+    if (!deleted) return c.json({ error: "Observation not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error("[routes] DELETE /api/observations error:", error);
+    return c.json({ error: "Failed to delete observation" }, 500);
+  }
+});
+app.delete("/api/summaries/:id", (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
+    const deleted = deleteSummary(id);
+    if (!deleted) return c.json({ error: "Summary not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error("[routes] DELETE /api/summaries error:", error);
+    return c.json({ error: "Failed to delete summary" }, 500);
+  }
+});
+app.delete("/api/sessions/:id", (c) => {
+  try {
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
+    const deleted = deleteSession(id);
+    if (!deleted) return c.json({ error: "Session not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error("[routes] DELETE /api/sessions error:", error);
+    return c.json({ error: "Failed to delete session" }, 500);
+  }
+});
+app.get("/api/dashboard/context-preview", (c) => {
+  try {
+    const project = c.req.query("project") || "unknown";
+    const context = generateContext(project);
+    const estimatedTokens = Math.ceil(context.length / 4);
+    return c.json({ context, estimatedTokens });
+  } catch (error) {
+    console.error("[routes] /api/dashboard/context-preview error:", error);
+    return c.json({ error: "Failed to generate context preview" }, 500);
+  }
+});
+app.get("/api/settings", (c) => {
+  try {
+    return c.json(getAllSettings());
+  } catch (error) {
+    console.error("[routes] GET /api/settings error:", error);
+    return c.json({ error: "Failed to get settings" }, 500);
+  }
+});
+app.put("/api/settings", async (c) => {
+  try {
+    const body = await c.req.json();
+    const updated = updateSettings(body);
+    return c.json(updated);
+  } catch (error) {
+    console.error("[routes] PUT /api/settings error:", error);
+    return c.json({ error: "Failed to update settings" }, 500);
   }
 });
 

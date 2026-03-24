@@ -30,7 +30,7 @@
 
 <div class="feed">
   {#each items as item (item.item_type + '-' + item.id)}
-    <FeedItemComponent {item} />
+    <FeedItemComponent {item} ondelete={(deleted) => { items = items.filter(i => !(i.item_type === deleted.item_type && i.id === deleted.id)); }} />
   {/each}
 
   {#if loading}

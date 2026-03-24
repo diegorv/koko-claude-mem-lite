@@ -50,7 +50,7 @@
   <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 8px;">{results.length} results</div>
   <div class="feed">
     {#each results as r}
-      <FeedItemComponent item={{ ...r, item_type: 'observation' }} />
+      <FeedItemComponent item={{ ...r, item_type: 'observation' }} ondelete={(deleted) => { results = results.filter(i => i.id !== deleted.id); }} />
     {/each}
   </div>
 {:else if searched}

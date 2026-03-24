@@ -1,9 +1,29 @@
 <script lang="ts">
   import type { FeedItem } from '../api';
-  let { item }: { item: FeedItem } = $props();
+  import { deleteObservation, deleteSummary } from '../api';
+  let { item, ondelete }: { item: FeedItem; ondelete?: (item: FeedItem) => void } = $props();
 
   let viewMode: 'narrative' | 'facts' = $state('narrative');
   let copiedId = $state('');
+  let confirmDelete = $state(false);
+  let deleting = $state(false);
+
+  async function handleDelete() {
+    deleting = true;
+    try {
+      if (item.item_type === 'observation') {
+        await deleteObservation(item.id);
+      } else {
+        await deleteSummary(item.id);
+      }
+      ondelete?.(item);
+    } catch (err) {
+      console.error('Delete failed:', err);
+    } finally {
+      deleting = false;
+      confirmDelete = false;
+    }
+  }
 
   function parseJson(s: string | null | undefined): any[] {
     if (!s) return [];
@@ -47,6 +67,15 @@
       }}>
         {copiedId === item.content_session_id ? 'copied!' : 'resume'}
       </button>
+    {/if}
+    {#if confirmDelete}
+      <span class="delete-confirm">
+        <span class="delete-confirm-text">Delete?</span>
+        <button class="delete-yes" onclick={handleDelete} disabled={deleting}>{deleting ? '...' : 'Yes'}</button>
+        <button class="delete-cancel" onclick={() => confirmDelete = false}>No</button>
+      </span>
+    {:else}
+      <button class="delete-btn" title="Delete" onclick={() => confirmDelete = true}>&#x2715;</button>
     {/if}
   </div>
 

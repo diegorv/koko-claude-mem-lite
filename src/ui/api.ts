@@ -102,3 +102,53 @@ export function search(q: string, project?: string): Promise<{ results: any[]; m
   if (project) params.set('project', project);
   return fetchJson(`/api/search?${params}`);
 }
+
+// Delete operations
+async function fetchDelete(url: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}${url}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+export function deleteObservation(id: number): Promise<{ ok: boolean }> {
+  return fetchDelete(`/api/observations/${id}`);
+}
+
+export function deleteSummary(id: number): Promise<{ ok: boolean }> {
+  return fetchDelete(`/api/summaries/${id}`);
+}
+
+export function deleteSession(id: number): Promise<{ ok: boolean }> {
+  return fetchDelete(`/api/sessions/${id}`);
+}
+
+// Context preview
+export function getContextPreview(project?: string): Promise<{ context: string; estimatedTokens: number }> {
+  const params = new URLSearchParams();
+  if (project) params.set('project', project);
+  return fetchJson(`/api/dashboard/context-preview?${params}`);
+}
+
+// Settings
+export interface SettingsData {
+  WORKER_PORT: number;
+  OBSERVATION_COUNT: number;
+  FULL_OBSERVATION_COUNT: number;
+  SUMMARY_COUNT: number;
+  OLLAMA_URL: string;
+  OLLAMA_MODEL: string;
+}
+
+export function getSettingsData(): Promise<SettingsData> {
+  return fetchJson('/api/settings');
+}
+
+export async function updateSettings(settings: Partial<SettingsData>): Promise<SettingsData> {
+  const res = await fetch(`${BASE}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
