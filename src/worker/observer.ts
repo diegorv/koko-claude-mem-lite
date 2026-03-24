@@ -378,9 +378,6 @@ export class ObserverSession {
   }
 
   private resolveAndCleanup(msg: PendingMessage, text: string): void {
-    // Delete from durable store FIRST to prevent reprocessing on crash
-    deletePending(msg.id);
-
     if (msg.kind === 'observation' && text) {
       const parsed = parseObservationXml(text);
       if (parsed && parsed.type !== 'skip') {
@@ -388,14 +385,22 @@ export class ObserverSession {
         if (session) {
           try {
             const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
+            // Delete from durable store only AFTER successful storage
+            deletePending(msg.id);
             if (!result.deduplicated) {
               embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
                 .catch(err => console.error('[observer] embedding failed:', err));
             }
           } catch (err) {
             console.error('[observer] Failed to store observation:', err);
+            // Don't delete pending — will be retried on next restart
+            return;
           }
+        } else {
+          deletePending(msg.id);
         }
+      } else {
+        deletePending(msg.id);
       }
       // Resolve pending promise (for any callers still awaiting)
       const pending = this.pendingResults.get(msg.id);
@@ -410,10 +415,18 @@ export class ObserverSession {
         if (session) {
           try {
             storeSummary(session.id, session.project, parsed);
+            // Delete from durable store only AFTER successful storage
+            deletePending(msg.id);
           } catch (err) {
             console.error('[observer] Failed to store summary:', err);
+            // Don't delete pending — will be retried on next restart
+            return;
           }
+        } else {
+          deletePending(msg.id);
         }
+      } else {
+        deletePending(msg.id);
       }
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
@@ -421,6 +434,8 @@ export class ObserverSession {
         pending.resolve(parsed ?? null);
       }
     } else {
+      // Empty text — nothing to store, safe to delete
+      deletePending(msg.id);
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
         this.pendingResults.delete(msg.id);
