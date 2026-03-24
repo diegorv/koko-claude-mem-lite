@@ -115,9 +115,9 @@
     }
   }
 
-  function toggleCleanupItem(id: number) {
+  function toggleCleanupItem(id: number, type: string) {
     cleanupResults = cleanupResults.map(r =>
-      r.id === id ? { ...r, action: r.action === 'delete' ? 'keep' : 'delete' } : r
+      (r.id === id && r.type === type) ? { ...r, action: r.action === 'delete' ? 'keep' : 'delete' } : r
     );
   }
 
@@ -219,7 +219,7 @@
       <div class="cleanup-list">
         {#each cleanupResults as r (r.type + '-' + r.id)}
           <div class="cleanup-item" class:to-delete={r.action === 'delete'} class:to-keep={r.action === 'keep'}>
-            <button class="cleanup-toggle" onclick={() => toggleCleanupItem(r.id)}>
+            <button class="cleanup-toggle" onclick={() => toggleCleanupItem(r.id, r.type)}>
               {r.action === 'delete' ? '[-]' : '[+]'}
             </button>
             <span class="cleanup-type badge {r.type === 'summary' ? 'summary' : 'raw'}">{r.type}</span>
