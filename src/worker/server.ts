@@ -52,6 +52,7 @@ function shutdown(): void {
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+process.on('SIGHUP', shutdown);
 
 // Check if another worker is running
 async function checkExistingWorker(): Promise<boolean> {
