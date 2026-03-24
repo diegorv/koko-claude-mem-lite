@@ -7,7 +7,7 @@ import { app } from './routes.js';
 import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
 import { closeDb, getDb } from '../db/database.js';
-import { destroyAllObservers } from './observer.js';
+import { destroyAllObservers, destroyObserver, getActiveSessionIds, getSessionAge } from './observer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -39,9 +39,44 @@ function removePid(): void {
 
 let shutdownInitiated = false;
 
+// --- Stale session reaper (safety net for when session-end hook doesn't fire) ---
+const STALE_SESSION_MS = 30 * 60 * 1000; // 30 min
+const reaperInterval = setInterval(() => {
+  try {
+    for (const id of getActiveSessionIds()) {
+      const age = getSessionAge(id);
+      if (age > STALE_SESSION_MS) {
+        console.log(`[reaper] Destroying stale session ${id} (idle: ${Math.round(age / 1000)}s)`);
+        destroyObserver(id);
+      }
+    }
+  } catch (err) {
+    console.error('[reaper] Error:', err);
+  }
+}, 60_000);
+reaperInterval.unref();
+
+// --- Idle auto-shutdown (no sessions + no API activity for 30 min → exit) ---
+const IDLE_SHUTDOWN_MS = 30 * 60 * 1000;
+let lastApiActivity = Date.now();
+app.use('/api/*', async (c, next) => {
+  lastApiActivity = Date.now();
+  await next();
+});
+const idleShutdownInterval = setInterval(() => {
+  if (getActiveSessionIds().length === 0 && Date.now() - lastApiActivity > IDLE_SHUTDOWN_MS) {
+    console.log('[worker] No active sessions and idle for 30min, shutting down');
+    shutdown();
+  }
+}, 60_000);
+idleShutdownInterval.unref();
+
 function shutdown(): void {
   if (shutdownInitiated) return;
   shutdownInitiated = true;
+
+  clearInterval(reaperInterval);
+  clearInterval(idleShutdownInterval);
 
   const forceTimer = setTimeout(() => {
     console.error('[worker] Graceful shutdown timed out after 10s, force exiting');
