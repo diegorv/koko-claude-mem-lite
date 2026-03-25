@@ -247,11 +247,12 @@ a:hover { text-decoration: underline; }
 
 .badge.observation { background: var(--accent-dim); color: var(--accent); }
 .badge.summary { background: var(--green-dim); color: var(--green); }
+.badge.bugfix { background: #3d1e1e; color: #f97583; }
+.badge.feature { background: #1a3a2c; color: var(--green); }
+.badge.refactor { background: #2d1b4e; color: var(--purple); }
 .badge.discovery { background: #1a3a5c; color: #79c0ff; }
-.badge.implementation { background: #1a3a2c; color: var(--green); }
-.badge.debugging { background: #3d1e00; color: var(--orange); }
-.badge.architecture { background: #2d1b4e; color: var(--purple); }
-.badge.raw { background: #272727; color: var(--text-muted); }
+.badge.decision { background: #3d2e00; color: var(--orange); }
+.badge.change { background: #272727; color: var(--text-muted); }
 
 .feed-item .project-name {
   font-size: 11px;

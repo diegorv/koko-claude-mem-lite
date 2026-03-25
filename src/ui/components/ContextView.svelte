@@ -204,14 +204,14 @@
           {#if result}
             <div class="cleanup-item" class:to-delete={result.action === 'delete'} class:to-keep={result.action === 'keep'}>
               <span class="cleanup-toggle">{result.action === 'delete' ? '[-]' : '[+]'}</span>
-              <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : 'raw'}">{item.type}</span>
+              <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : (item.type || 'change')}">{item.type}</span>
               <span class="cleanup-id">#{item.id}</span>
               <span class="cleanup-reason">{result.reason}</span>
             </div>
           {:else}
             <div class="cleanup-item pending">
               <span class="cleanup-toggle loading-pulse">[ ]</span>
-              <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : 'raw'}">{item.type}</span>
+              <span class="cleanup-type badge {item.type === 'summary' ? 'summary' : (item.type || 'change')}">{item.type}</span>
               <span class="cleanup-id">#{item.id}</span>
               <span class="cleanup-reason">{item.text.slice(0, 80)}{item.text.length > 80 ? '...' : ''}</span>
             </div>
@@ -240,7 +240,7 @@
             <button class="cleanup-toggle" onclick={() => toggleCleanupItem(r.id, r.type)}>
               {r.action === 'delete' ? '[-]' : '[+]'}
             </button>
-            <span class="cleanup-type badge {r.type === 'summary' ? 'summary' : 'raw'}">{r.type}</span>
+            <span class="cleanup-type badge {r.type === 'summary' ? 'summary' : 'observation'}">{r.type}</span>
             <span class="cleanup-id">#{r.id}</span>
             <span class="cleanup-reason">{r.reason}</span>
           </div>
