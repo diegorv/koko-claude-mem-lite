@@ -12,9 +12,9 @@ vi.mock('../../src/db/database.js', async (importOriginal) => {
 vi.mock('../../src/utils/settings.js', () => ({
   getSetting: (key: string) => {
     const defaults: Record<string, number> = {
-      OBSERVATION_COUNT: 50,
-      FULL_OBSERVATION_COUNT: 5,
-      SUMMARY_COUNT: 3,
+      OBSERVATION_COUNT: 25,
+      FULL_OBSERVATION_COUNT: 3,
+      SUMMARY_COUNT: 2,
     };
     return defaults[key];
   },
@@ -80,45 +80,77 @@ describe('generateContext', () => {
     expect(ctx).toContain('# Memory Context | my-project');
   });
 
-  it('includes recent summaries section', () => {
+  it('uses compact timeline format (no markdown table)', () => {
     const session = insertSession('cs-1', 'proj');
-    insertSummary(session.id, 'proj', 'Fix authentication', 1700000000000);
+    insertObservation(session.id, 'proj', 'Added feature X', 1700000000000, { type: 'feature' });
     const ctx = generateContext('proj');
-    expect(ctx).toContain('## Recent Summaries');
-    expect(ctx).toContain('Fix authentication');
-    expect(ctx).toContain('**Completed:** Completed Z');
-    expect(ctx).toContain('**Learned:** Learned Y');
-    expect(ctx).toContain('**Next steps:** Next: do W');
-  });
-
-  it('includes recent activity table', () => {
-    const session = insertSession('cs-1', 'proj');
-    insertObservation(session.id, 'proj', 'Added feature X', 1700000000000);
-    const ctx = generateContext('proj');
-    expect(ctx).toContain('## Recent Activity');
-    expect(ctx).toContain('| Time | Type | Title | Files |');
+    // Should NOT have markdown table
+    expect(ctx).not.toContain('| Time | Type | Title | Files |');
+    // Should have compact line with type icon
+    expect(ctx).toContain('[feat]');
     expect(ctx).toContain('Added feature X');
   });
 
-  it('includes details section for top observations', () => {
+  it('groups entries by day', () => {
     const session = insertSession('cs-1', 'proj');
-    insertObservation(session.id, 'proj', 'Detailed obs', 1700000000000);
+    const day1 = new Date('2024-03-20T10:00:00Z').getTime();
+    const day2 = new Date('2024-03-21T15:00:00Z').getTime();
+    insertObservation(session.id, 'proj', 'Day 1 obs', day1);
+    insertObservation(session.id, 'proj', 'Day 2 obs', day2);
     const ctx = generateContext('proj');
-    expect(ctx).toContain('## Details');
-    expect(ctx).toContain('Detailed obs');
-    expect(ctx).toContain('**Facts:**');
-    expect(ctx).toContain('**Narrative:**');
+    expect(ctx).toContain('### Mar 20');
+    expect(ctx).toContain('### Mar 21');
   });
 
-  it('shows file basenames in activity table', () => {
+  it('interleaves summaries and observations chronologically', () => {
     const session = insertSession('cs-1', 'proj');
-    insertObservation(session.id, 'proj', 'File test', 1700000000000, {
-      files_read: '["src/deep/path/file.ts"]',
-      files_modified: '["lib/other.ts"]',
-    });
+    const epoch1 = new Date('2024-03-20T09:00:00Z').getTime();
+    const epoch2 = new Date('2024-03-20T10:00:00Z').getTime();
+    const epoch3 = new Date('2024-03-20T11:00:00Z').getTime();
+    insertObservation(session.id, 'proj', 'Before summary', epoch1);
+    insertSummary(session.id, 'proj', 'Mid-day session', epoch2);
+    insertObservation(session.id, 'proj', 'After summary', epoch3);
     const ctx = generateContext('proj');
-    expect(ctx).toContain('file.ts');
-    expect(ctx).toContain('other.ts');
+    const beforePos = ctx.indexOf('Before summary');
+    const summaryPos = ctx.indexOf('Mid-day session');
+    const afterPos = ctx.indexOf('After summary');
+    expect(beforePos).toBeLessThan(summaryPos);
+    expect(summaryPos).toBeLessThan(afterPos);
+  });
+
+  it('shows summary with learned and next fields', () => {
+    const session = insertSession('cs-1', 'proj');
+    insertSummary(session.id, 'proj', 'Fix authentication', 1700000000000);
+    const ctx = generateContext('proj');
+    expect(ctx).toContain('Fix authentication');
+    expect(ctx).toContain('Learned: Learned Y');
+    expect(ctx).toContain('Next: Next: do W');
+  });
+
+  it('shows full detail (bold + narrative) for recent observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    // Most recent gets full detail (FULL_OBSERVATION_COUNT=3)
+    insertObservation(session.id, 'proj', 'Detailed obs', 1700000000000);
+    const ctx = generateContext('proj');
+    expect(ctx).toContain('**Detailed obs**');
+    expect(ctx).toContain('A narrative about the observation.');
+  });
+
+  it('shows compact line for older observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    const base = 1700000000000;
+    // Insert 5 observations — only top 3 get detail
+    for (let i = 0; i < 5; i++) {
+      insertObservation(session.id, 'proj', `Obs ${i}`, base + i * 1000);
+    }
+    const ctx = generateContext('proj');
+    // Oldest 2 should be compact (no bold)
+    expect(ctx).not.toContain('**Obs 0**');
+    expect(ctx).not.toContain('**Obs 1**');
+    // Newest 3 should be bold
+    expect(ctx).toContain('**Obs 2**');
+    expect(ctx).toContain('**Obs 3**');
+    expect(ctx).toContain('**Obs 4**');
   });
 
   it('handles observations with null fields', () => {
@@ -128,6 +160,20 @@ describe('generateContext', () => {
     });
     const ctx = generateContext('proj');
     expect(ctx).toContain('Minimal');
+  });
+
+  it('uses correct type icons', () => {
+    const session = insertSession('cs-1', 'proj');
+    const base = 1700000000000;
+    insertObservation(session.id, 'proj', 'Bug fix', base, { type: 'bugfix' });
+    insertObservation(session.id, 'proj', 'New feat', base + 1000, { type: 'feature' });
+    insertObservation(session.id, 'proj', 'Found X', base + 2000, { type: 'discovery' });
+    insertObservation(session.id, 'proj', 'Chose Y', base + 3000, { type: 'decision' });
+    const ctx = generateContext('proj');
+    expect(ctx).toContain('[fix]');
+    expect(ctx).toContain('[feat]');
+    expect(ctx).toContain('[discovery]');
+    expect(ctx).toContain('[decision]');
   });
 });
 

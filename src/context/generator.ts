@@ -6,7 +6,7 @@ export interface ContextBreakdown {
   estimatedTokens: number;
   summaries: Summary[];
   observations: Observation[];
-  detailedIds: number[];  // observation IDs that get full detail section
+  detailedIds: number[];  // observation IDs that get full detail in timeline
 }
 
 export function generateContextDetailed(project: string): ContextBreakdown {
@@ -28,6 +28,27 @@ export function generateContextDetailed(project: string): ContextBreakdown {
   };
 }
 
+// --- Type icons for compact timeline ---
+const TYPE_ICONS: Record<string, string> = {
+  bugfix: '[fix]',
+  feature: '[feat]',
+  refactor: '[refactor]',
+  discovery: '[discovery]',
+  decision: '[decision]',
+  change: '[change]',
+};
+
+function typeIcon(type: string): string {
+  return TYPE_ICONS[type] || `[${type}]`;
+}
+
+// --- Timeline item types ---
+interface TimelineEntry {
+  kind: 'observation' | 'summary';
+  epoch: number;
+  data: Observation | Summary;
+}
+
 export function generateContext(project: string): string {
   const observationCount = getSetting('OBSERVATION_COUNT');
   const fullDetailCount = getSetting('FULL_OBSERVATION_COUNT');
@@ -40,76 +61,72 @@ export function generateContext(project: string): string {
     return '';
   }
 
+  // Build unified timeline sorted chronologically (oldest first)
+  const fullIds = new Set(observations.slice(0, fullDetailCount).map(o => o.id));
+
+  const timeline: TimelineEntry[] = [
+    ...observations.map(o => ({ kind: 'observation' as const, epoch: o.created_at_epoch, data: o })),
+    ...summaries.map(s => ({ kind: 'summary' as const, epoch: s.created_at_epoch, data: s })),
+  ];
+  timeline.sort((a, b) => a.epoch - b.epoch);
+
+  // Group by day
+  const dayGroups = new Map<string, TimelineEntry[]>();
+  for (const entry of timeline) {
+    const day = formatDay(entry.data.created_at);
+    if (!dayGroups.has(day)) dayGroups.set(day, []);
+    dayGroups.get(day)!.push(entry);
+  }
+
   const lines: string[] = [];
-  lines.push(`<memory-lite-context>`);
+  lines.push('<memory-lite-context>');
   lines.push(`# Memory Context | ${project}`);
   lines.push('');
 
-  // Recent summaries
-  if (summaries.length > 0) {
-    lines.push('## Recent Summaries');
-    for (const s of summaries) {
-      const date = new Date(s.created_at).toLocaleDateString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric'
-      });
-      lines.push(`### ${date} - ${s.request || 'Session'}`);
-      if (s.completed) lines.push(`- **Completed:** ${s.completed}`);
-      if (s.learned) lines.push(`- **Learned:** ${s.learned}`);
-      if (s.next_steps) lines.push(`- **Next steps:** ${s.next_steps}`);
-      lines.push('');
-    }
-  }
+  for (const [day, entries] of dayGroups) {
+    lines.push(`### ${day}`);
 
-  // Recent activity table
-  if (observations.length > 0) {
-    lines.push('## Recent Activity');
-    lines.push('| Time | Type | Title | Files |');
-    lines.push('|------|------|-------|-------|');
+    for (const entry of entries) {
+      if (entry.kind === 'summary') {
+        const s = entry.data as Summary;
+        lines.push(`S${s.id} ${s.request || 'Session'}`);
+        if (s.learned) lines.push(`  Learned: ${s.learned}`);
+        if (s.next_steps) lines.push(`  Next: ${s.next_steps}`);
+      } else {
+        const obs = entry.data as Observation;
+        const time = formatTime(obs.created_at);
+        const isFull = fullIds.has(obs.id);
 
-    for (const obs of observations) {
-      const time = new Date(obs.created_at).toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', hour12: false
-      });
-      const files = [
-        ...parseJsonArray(obs.files_read),
-        ...parseJsonArray(obs.files_modified),
-      ].map(f => basename(f)).join(', ');
-
-      lines.push(`| ${time} | ${obs.type} | ${obs.title || '-'} | ${files || '-'} |`);
-    }
-    lines.push('');
-
-    // Full details for most recent observations
-    const detailed = observations.slice(0, fullDetailCount);
-    if (detailed.length > 0) {
-      lines.push(`## Details (last ${detailed.length})`);
-      for (const obs of detailed) {
-        lines.push(`### #${obs.id} - ${obs.title || 'Untitled'}`);
-        const facts = parseJsonArray(obs.facts);
-        if (facts.length > 0) {
-          lines.push(`**Facts:** ${facts.join('; ')}`);
+        if (isFull) {
+          lines.push(`**${obs.id}** ${time} ${typeIcon(obs.type)} **${obs.title || 'Untitled'}**`);
+          if (obs.narrative) {
+            lines.push(`  ${obs.narrative}`);
+          }
+        } else {
+          lines.push(`${obs.id} ${time} ${typeIcon(obs.type)} ${obs.title || '-'}`);
         }
-        if (obs.narrative) {
-          lines.push(`**Narrative:** ${obs.narrative}`);
-        }
-        const filesRead = parseJsonArray(obs.files_read);
-        const filesMod = parseJsonArray(obs.files_modified);
-        if (filesRead.length > 0 || filesMod.length > 0) {
-          const parts: string[] = [];
-          if (filesRead.length > 0) parts.push(`read: ${filesRead.join(', ')}`);
-          if (filesMod.length > 0) parts.push(`modified: ${filesMod.join(', ')}`);
-          lines.push(`**Files:** ${parts.join(' | ')}`);
-        }
-        lines.push('');
       }
     }
+    lines.push('');
   }
 
   lines.push('</memory-lite-context>');
   return lines.join('\n');
 }
 
-function parseJsonArray(json: string | null): string[] {
+function formatDay(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric',
+  });
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-US', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
+
+export function parseJsonArray(json: string | null): string[] {
   if (!json) return [];
   try {
     const arr = JSON.parse(json);
@@ -117,8 +134,4 @@ function parseJsonArray(json: string | null): string[] {
   } catch {
     return [];
   }
-}
-
-function basename(path: string): string {
-  return path.split('/').pop() || path;
 }
