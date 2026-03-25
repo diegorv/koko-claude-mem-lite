@@ -28,19 +28,26 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
   }
   creatingSessions.add(contentSessionId);
 
-  // Evict oldest session if cap is reached to prevent unbounded process accumulation
+  // Evict a session if cap is reached. Prefer sessions with zero pending
+  // messages to avoid data loss; fall back to oldest session if all have work.
   if (activeSessions.size >= MAX_OBSERVERS) {
-    let oldestId: string | null = null;
-    let oldestTime = Infinity;
+    let evictId: string | null = null;
+    let evictTime = Infinity;
+    let evictHasPending = true;
+
     for (const [id, s] of activeSessions) {
-      if (s.lastActivityTime < oldestTime) {
-        oldestTime = s.lastActivityTime;
-        oldestId = id;
+      const hasPendingWork = getPendingCount(id) > 0;
+      // Prefer idle sessions (no pending) over busy ones; among equals pick oldest
+      if ((!hasPendingWork && evictHasPending) ||
+          (hasPendingWork === evictHasPending && s.lastActivityTime < evictTime)) {
+        evictId = id;
+        evictTime = s.lastActivityTime;
+        evictHasPending = hasPendingWork;
       }
     }
-    if (oldestId) {
-      logger.warn('observer', `Observer cap (${MAX_OBSERVERS}) reached, evicting oldest session ${oldestId}`);
-      destroyObserver(oldestId);
+    if (evictId) {
+      logger.warn('observer', `Observer cap (${MAX_OBSERVERS}) reached, evicting session ${evictId} (hasPending=${evictHasPending})`);
+      destroyObserver(evictId);
     }
   }
 
