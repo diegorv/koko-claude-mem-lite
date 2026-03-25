@@ -66,3 +66,18 @@ export function getPendingCount(contentSessionId: string): number {
   ).get(contentSessionId) as { count: number };
   return row.count;
 }
+
+/** Reset ALL processing messages to pending (used on startup — SDK context is lost). */
+export function forceUnstickAllGlobal(): number {
+  return getDb().prepare(
+    "UPDATE pending_messages SET status = 'pending' WHERE status = 'processing'"
+  ).run().changes;
+}
+
+/** Returns distinct session IDs that have any pending or stuck-processing messages. */
+export function getSessionsWithPendingMessages(): string[] {
+  const rows = getDb().prepare(
+    'SELECT DISTINCT content_session_id FROM pending_messages'
+  ).all() as { content_session_id: string }[];
+  return rows.map(r => r.content_session_id);
+}

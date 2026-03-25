@@ -3831,6 +3831,17 @@ function getPendingCount(contentSessionId) {
   ).get(contentSessionId);
   return row.count;
 }
+function forceUnstickAllGlobal() {
+  return getDb().prepare(
+    "UPDATE pending_messages SET status = 'pending' WHERE status = 'processing'"
+  ).run().changes;
+}
+function getSessionsWithPendingMessages() {
+  const rows = getDb().prepare(
+    "SELECT DISTINCT content_session_id FROM pending_messages"
+  ).all();
+  return rows.map((r) => r.content_session_id);
+}
 
 // src/embeddings/embeddings.ts
 async function generateEmbedding(text) {
@@ -4175,7 +4186,7 @@ var ObserverSession = class _ObserverSession {
     return this.destroyed;
   }
   async runConversation(project, userPrompt) {
-    let currentPendingMsg = null;
+    const processingMsgs = [];
     const isResume = !!this.memorySessionId;
     try {
       const self = this;
@@ -4191,7 +4202,7 @@ var ObserverSession = class _ObserverSession {
           yield toSDKMessage(buildInitPrompt(project, userPrompt));
         }
         for await (const msg of self.queue) {
-          currentPendingMsg = msg;
+          processingMsgs.push(msg);
           yield toSDKMessage(msg.prompt);
         }
       })();
@@ -4261,9 +4272,9 @@ var ObserverSession = class _ObserverSession {
             if (text.length > 0) {
               logger.info("observer", `Assistant response (${text.length} chars) for ${this.contentSessionId}`);
             }
-            if (currentPendingMsg && text) {
-              this.resolveAndCleanup(currentPendingMsg, text);
-              currentPendingMsg = null;
+            if (processingMsgs.length > 0 && text) {
+              const msg = processingMsgs.shift();
+              this.resolveAndCleanup(msg, text);
             }
           }
           if (message.type === "result") {
@@ -4281,10 +4292,12 @@ var ObserverSession = class _ObserverSession {
     } catch (error) {
       logger.error("observer", `Conversation error for ${this.contentSessionId}`, error);
     } finally {
-      const leftover = currentPendingMsg;
-      if (leftover) {
-        logger.info("observer", `Resolving leftover pending msg id=${leftover.id} with empty text`);
-        this.resolveAndCleanup(leftover, "");
+      if (processingMsgs.length > 0) {
+        logger.info("observer", `Resolving ${processingMsgs.length} leftover pending msgs with empty text`);
+        for (const leftover of processingMsgs) {
+          this.resolveAndCleanup(leftover, "");
+        }
+        processingMsgs.length = 0;
       }
       const remainingCount = getPendingCount(this.contentSessionId);
       logger.info("observer", `Conversation ended for ${this.contentSessionId} (remaining=${remainingCount}, restarts=${this.restartCount}/${MAX_RESTARTS}, destroyed=${this.destroyed})`);
@@ -5040,6 +5053,28 @@ var alreadyRunning = await checkExistingWorker();
 if (alreadyRunning) process.exit(0);
 writePid();
 getDb();
+var resetCount = forceUnstickAllGlobal();
+if (resetCount > 0) {
+  logger.info("recovery", `Reset ${resetCount} stale processing messages to pending`);
+}
+setTimeout(() => {
+  try {
+    const sessionIds = getSessionsWithPendingMessages();
+    if (sessionIds.length === 0) return;
+    logger.info("recovery", `Found ${sessionIds.length} session(s) with orphaned pending messages`);
+    for (const contentSessionId of sessionIds) {
+      const session = getSessionByContentId(contentSessionId);
+      if (!session) {
+        logger.warn("recovery", `Session ${contentSessionId} not found in DB, skipping`);
+        continue;
+      }
+      logger.info("recovery", `Creating observer to drain ${contentSessionId} (project: ${session.project})`);
+      getOrCreateObserver(contentSessionId, session.project);
+    }
+  } catch (err) {
+    logger.error("recovery", "Failed to recover pending messages", err);
+  }
+}, 2e3);
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
   logger.info("worker", `Memory-lite worker running on http://127.0.0.1:${port}`);
 });

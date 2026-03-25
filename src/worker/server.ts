@@ -7,7 +7,9 @@ import { app } from './routes.js';
 import { getSetting } from '../utils/settings.js';
 import { getPidPath } from '../utils/paths.js';
 import { closeDb, getDb } from '../db/database.js';
-import { destroyAllObservers, destroyObserver, getActiveSessionIds, getSessionAge } from './observer.js';
+import { destroyAllObservers, destroyObserver, getActiveSessionIds, getSessionAge, getOrCreateObserver } from './observer.js';
+import { getSessionsWithPendingMessages, forceUnstickAllGlobal } from '../db/pending-store.js';
+import { getSessionByContentId } from '../db/queries.js';
 import { logger } from '../utils/logger.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -132,6 +134,34 @@ if (alreadyRunning) process.exit(0);
 
 writePid();
 getDb(); // Eagerly initialize DB so /api/readiness becomes true before first request
+
+// --- Startup recovery: drain orphaned pending messages ---
+// Step 1: Reset ALL processing messages to pending (SDK context is always lost on restart)
+const resetCount = forceUnstickAllGlobal();
+if (resetCount > 0) {
+  logger.info('recovery', `Reset ${resetCount} stale processing messages to pending`);
+}
+
+// Step 2: Create observers to drain orphaned queues (fire-and-forget)
+setTimeout(() => {
+  try {
+    const sessionIds = getSessionsWithPendingMessages();
+    if (sessionIds.length === 0) return;
+
+    logger.info('recovery', `Found ${sessionIds.length} session(s) with orphaned pending messages`);
+    for (const contentSessionId of sessionIds) {
+      const session = getSessionByContentId(contentSessionId);
+      if (!session) {
+        logger.warn('recovery', `Session ${contentSessionId} not found in DB, skipping`);
+        continue;
+      }
+      logger.info('recovery', `Creating observer to drain ${contentSessionId} (project: ${session.project})`);
+      getOrCreateObserver(contentSessionId, session.project);
+    }
+  } catch (err) {
+    logger.error('recovery', 'Failed to recover pending messages', err);
+  }
+}, 2000); // Delay to let worker fully initialize before spawning SDK subprocesses
 
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' }, () => {
   logger.info('worker', `Memory-lite worker running on http://127.0.0.1:${port}`);

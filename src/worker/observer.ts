@@ -344,7 +344,9 @@ export class ObserverSession {
   }
 
   private async runConversation(project: string, userPrompt?: string): Promise<void> {
-    let currentPendingMsg: any = null;
+    // FIFO queue: SDK may pull multiple messages from the generator before responding.
+    // Each assistant response is matched to the oldest unresolved message.
+    const processingMsgs: PendingMessage[] = [];
     const isResume = !!this.memorySessionId;
 
     try {
@@ -365,7 +367,7 @@ export class ObserverSession {
 
         // Messages from durable queue
         for await (const msg of self.queue) {
-          currentPendingMsg = msg;
+          processingMsgs.push(msg);
           yield toSDKMessage(msg.prompt);
         }
       }();
@@ -441,9 +443,9 @@ export class ObserverSession {
               logger.info('observer', `Assistant response (${text.length} chars) for ${this.contentSessionId}`);
             }
 
-            if (currentPendingMsg && text) {
-              this.resolveAndCleanup(currentPendingMsg, text);
-              currentPendingMsg = null;
+            if (processingMsgs.length > 0 && text) {
+              const msg = processingMsgs.shift()!;
+              this.resolveAndCleanup(msg, text);
             }
           }
 
@@ -463,10 +465,13 @@ export class ObserverSession {
     } catch (error) {
       logger.error('observer', `Conversation error for ${this.contentSessionId}`, error);
     } finally {
-      const leftover = currentPendingMsg as PendingMessage | null;
-      if (leftover) {
-        logger.info('observer', `Resolving leftover pending msg id=${leftover.id} with empty text`);
-        this.resolveAndCleanup(leftover, '');
+      // Resolve any messages the SDK never responded to
+      if (processingMsgs.length > 0) {
+        logger.info('observer', `Resolving ${processingMsgs.length} leftover pending msgs with empty text`);
+        for (const leftover of processingMsgs) {
+          this.resolveAndCleanup(leftover, '');
+        }
+        processingMsgs.length = 0;
       }
 
       // Auto-restart if pending messages remain
