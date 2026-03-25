@@ -182,10 +182,13 @@ export async function reviewCleanupStream(
   onResult: (result: CleanupResult) => void,
   onDone: (results: CleanupResult[], totalReviewed: number) => void,
 ): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 min timeout
   const res = await fetch(`${BASE}/api/cleanup/review`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project }),
+    signal: controller.signal,
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   if (!res.body) throw new Error('No response body');
@@ -223,6 +226,7 @@ export async function reviewCleanupStream(
       }
     }
   } finally {
+    clearTimeout(timeout);
     reader.cancel();
   }
 }

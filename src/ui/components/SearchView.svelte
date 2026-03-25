@@ -36,6 +36,12 @@
       doSearch();
     }
   });
+
+  // Re-run search when project filter changes
+  $effect(() => {
+    void project;
+    if (searched && localQuery.trim()) doSearch();
+  });
 </script>
 
 <div style="margin-bottom: 12px; display: flex; gap: 8px;">

@@ -14,6 +14,7 @@
   let activeTab: 'feed' | 'sessions' | 'search' | 'context' | 'settings' = $state('feed');
   let searchQuery = $state('');
   let initError: string | null = $state(null);
+  let runtimeError: string | null = $state(null);
 
   async function init() {
     try {
@@ -27,6 +28,16 @@
 
   init();
 
+  // Global error boundary for unhandled errors
+  if (typeof window !== 'undefined') {
+    window.addEventListener('error', (e) => {
+      runtimeError = e.message || 'An unexpected error occurred';
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      runtimeError = e.reason?.message || 'An unexpected error occurred';
+    });
+  }
+
   function handleSearch(q: string) {
     searchQuery = q;
     if (q) activeTab = 'search';
@@ -36,9 +47,17 @@
 <div class="app">
   <Header onsearch={handleSearch} />
 
+  {#if runtimeError}
+    <div style="padding: 12px; background: var(--bg-surface); border: 1px solid #c53030; border-radius: var(--radius-sm); color: var(--text-dim); margin: 8px 0; font-size: 12px;">
+      Error: {runtimeError}
+      <button onclick={() => { runtimeError = null; }} style="margin-left: 8px; font-size: 11px; cursor: pointer; background: none; border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); padding: 2px 6px;">Dismiss</button>
+    </div>
+  {/if}
+
   {#if initError}
     <div style="padding: 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); margin: 8px 0; font-size: 12px;">
       Failed to load: {initError}
+      <button onclick={() => { initError = null; init(); }} style="margin-left: 8px; font-size: 11px; cursor: pointer; background: none; border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); padding: 2px 6px;">Retry</button>
     </div>
   {:else if stats}
     <StatsBar {stats} />
