@@ -8,6 +8,7 @@ export interface Settings {
   SUMMARY_COUNT: number;
   OLLAMA_URL: string;
   OLLAMA_MODEL: string;
+  SKIP_TOOLS: string;
 }
 
 const DEFAULTS: Settings = {
@@ -17,6 +18,7 @@ const DEFAULTS: Settings = {
   SUMMARY_COUNT: 3,
   OLLAMA_URL: 'http://localhost:11434',
   OLLAMA_MODEL: 'bge-m3',
+  SKIP_TOOLS: 'Read,Glob,Grep,LSP',
 };
 
 let cached: Settings | null = null;

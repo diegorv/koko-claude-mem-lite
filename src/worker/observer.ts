@@ -227,6 +227,11 @@ export class ObserverSession {
             logger.info('observer', `${prev ? 'Updated' : 'Captured'} memorySessionId for ${this.contentSessionId}`);
           }
 
+          if (message.type === 'rate_limit_event') {
+            logger.warn('observer', `Rate limited — SDK will retry automatically for ${this.contentSessionId}`);
+            continue;
+          }
+
           if (message.type === 'assistant') {
             const text = extractAssistantText(message);
 

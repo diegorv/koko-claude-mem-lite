@@ -9,6 +9,7 @@ import { stripPrivateTags, isEntirelyPrivate } from '../../utils/privacy.js';
 import { embedObservation } from '../../embeddings/embeddings.js';
 import { getDb } from '../../db/database.js';
 import { logger } from '../../utils/logger.js';
+import { getSetting } from '../../utils/settings.js';
 
 export const sessionRoutes = new Hono();
 
@@ -59,6 +60,13 @@ sessionRoutes.post('/observations', async (c) => {
 
     const session = getSessionByContentId(contentSessionId);
     if (!session) return c.json({ error: 'Session not found' }, 404);
+
+    const skipTools = new Set(
+      getSetting('SKIP_TOOLS').split(',').map((s: string) => s.trim()).filter(Boolean)
+    );
+    if (skipTools.has(tool_name)) {
+      return c.json({ ok: true, skipped: true, reason: 'tool_excluded' });
+    }
 
     const cleanInput = stripPrivateTags(tool_input || '');
     const cleanResponse = stripPrivateTags(tool_response || '');
