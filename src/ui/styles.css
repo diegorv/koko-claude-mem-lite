@@ -810,6 +810,7 @@ a:hover { text-decoration: underline; }
   border-radius: 10px;
 }
 
+.export-btn,
 .refresh-btn {
   font-size: 11px;
   padding: 4px 12px;
@@ -822,11 +823,13 @@ a:hover { text-decoration: underline; }
   transition: all 0.15s;
 }
 
+.export-btn:hover:not(:disabled),
 .refresh-btn:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--text);
 }
 
+.export-btn:disabled,
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: default;

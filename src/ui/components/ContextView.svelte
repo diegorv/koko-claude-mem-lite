@@ -162,6 +162,18 @@
   });
 
   let deletionsCount = $derived(cleanupResults.filter(r => r.action === 'delete').length);
+
+  function exportContext() {
+    if (!data) return;
+    const filename = (project ? project.replace(/[^a-z0-9_-]/gi, '_') : 'context') + '.md';
+    const blob = new Blob([data.context], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 </script>
 
 <div class="context-view">
@@ -187,6 +199,9 @@
         <button class:active={viewMode === 'structured'} onclick={() => viewMode = 'structured'}>Items</button>
         <button class:active={viewMode === 'raw'} onclick={() => viewMode = 'raw'}>Raw</button>
       </div>
+      <button class="export-btn" onclick={exportContext} disabled={loading || !data}>
+        Export .md
+      </button>
       <button class="refresh-btn" onclick={load} disabled={loading}>
         {loading ? 'Loading...' : 'Refresh'}
       </button>
