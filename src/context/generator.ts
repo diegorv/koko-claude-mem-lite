@@ -90,6 +90,7 @@ export function generateContext(project: string): string {
       if (entry.kind === 'summary') {
         const s = entry.data as Summary;
         lines.push(`S${s.id} ${s.request || 'Session'}`);
+        if (s.completed) lines.push(`  Done: ${s.completed}`);
         if (s.learned) lines.push(`  Learned: ${s.learned}`);
         if (s.next_steps) lines.push(`  Next: ${s.next_steps}`);
       } else {
@@ -99,11 +100,13 @@ export function generateContext(project: string): string {
 
         if (isFull) {
           lines.push(`**${obs.id}** ${time} ${typeIcon(obs.type)} **${obs.title || 'Untitled'}**`);
-          if (obs.narrative) {
-            lines.push(`  ${obs.narrative}`);
-          }
+          if (obs.subtitle) lines.push(`  ${obs.subtitle}`);
+          if (obs.narrative) lines.push(`  ${obs.narrative}`);
+          const facts = parseJsonArray(obs.facts);
+          for (const fact of facts) lines.push(`  - ${fact}`);
         } else {
-          lines.push(`${obs.id} ${time} ${typeIcon(obs.type)} ${obs.title || '-'}`);
+          const subtitle = obs.subtitle ? ` — ${obs.subtitle}` : '';
+          lines.push(`${obs.id} ${time} ${typeIcon(obs.type)} ${obs.title || '-'}${subtitle}`);
         }
       }
     }

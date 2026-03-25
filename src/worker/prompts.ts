@@ -252,10 +252,9 @@ ${truncate(lastAssistantMessage, 5000)}
 Respond in this XML format:
 <summary>
   <request>What the user originally asked for</request>
-  <investigated>What was explored or researched</investigated>
-  <learned>Key findings or discoveries</learned>
-  <completed>What was actually done/implemented</completed>
-  <next_steps>What remains to be done</next_steps>
+  <learned>Key findings or discoveries (non-obvious gotchas, root causes, insights)</learned>
+  <completed>What was accomplished — the outcome, not the process</completed>
+  <next_steps>What remains to be done (omit if nothing non-obvious remains)</next_steps>
 </summary>
 
 Output ONLY the summary XML, nothing else.`;
