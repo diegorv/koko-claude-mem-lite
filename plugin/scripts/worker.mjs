@@ -794,7 +794,7 @@ var serveStatic = (options = { root: "" }) => {
 };
 
 // src/worker/server.ts
-import { existsSync as existsSync5, readFileSync as readFileSync2, writeFileSync as writeFileSync2, unlinkSync } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync3 } from "fs";
 import { join as join4, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -3288,280 +3288,10 @@ function getTimelineAroundObservation(anchorId, depthBefore = 5, depthAfter = 5,
   return { anchor, before: before.reverse(), after };
 }
 
-// src/worker/formatter.ts
-var TYPE_ICONS = {
-  bugfix: "\u{1F534}",
-  feature: "\u{1F7E2}",
-  refactor: "\u{1F7E3}",
-  discovery: "\u{1F535}",
-  decision: "\u{1F9E0}",
-  change: "\u26AA"
-};
-function typeIcon(type) {
-  return TYPE_ICONS[type] || "\u26AA";
-}
-function truncate(text, max) {
-  if (text.length <= max) return text;
-  return text.slice(0, max - 3) + "...";
-}
-function estimateTokens(obs) {
-  const size = (obs.title || "").length + (obs.narrative || "").length + (obs.facts || "").length;
-  return Math.ceil(size / 4);
-}
-function formatTime(isoDate) {
-  return new Date(isoDate).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true
-  });
-}
-function formatDate(isoDate) {
-  return new Date(isoDate).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric"
-  });
-}
-function formatSearchIndex(results) {
-  if (results.length === 0) return "No results found.";
-  const lines = [];
-  lines.push(`Found ${results.length} result(s):
-`);
-  lines.push("| ID | Time | T | Title | ~Tokens |");
-  lines.push("|----|------|---|-------|---------|");
-  let lastTime = "";
-  for (const r of results) {
-    const time = formatTime(r.created_at);
-    const displayTime = time === lastTime ? "\u2033" : time;
-    lastTime = time;
-    lines.push(
-      `| #${r.id} | ${displayTime} | ${typeIcon(r.type)} | ${truncate(r.title || "Untitled", 60)} | ~${estimateTokens(r)} |`
-    );
-  }
-  lines.push("");
-  lines.push("Use `memory_timeline` with an ID to see context, or `memory_get` with IDs to fetch full details.");
-  return lines.join("\n");
-}
-function formatTimeline(before, anchor, after) {
-  const all = [...before, anchor, ...after];
-  const lines = [];
-  lines.push(`Timeline around #${anchor.id}: "${anchor.title || "Untitled"}"
-`);
-  lines.push(`${before.length} before \u2192 anchor \u2192 ${after.length} after
-`);
-  const byDay = /* @__PURE__ */ new Map();
-  for (const obs of all) {
-    const day = formatDate(obs.created_at);
-    if (!byDay.has(day)) byDay.set(day, []);
-    byDay.get(day).push({ obs, isAnchor: obs.id === anchor.id });
-  }
-  for (const [day, items] of byDay) {
-    lines.push(`### ${day}`);
-    lines.push("| ID | Time | T | Title | ~Tokens |");
-    lines.push("|----|------|---|-------|---------|");
-    let lastTime = "";
-    for (const { obs, isAnchor } of items) {
-      const time = formatTime(obs.created_at);
-      const displayTime = time === lastTime ? "\u2033" : time;
-      lastTime = time;
-      const marker = isAnchor ? " \u2190 **ANCHOR**" : "";
-      lines.push(
-        `| #${obs.id} | ${displayTime} | ${typeIcon(obs.type)} | ${truncate(obs.title || "Untitled", 60)}${marker} | ~${estimateTokens(obs)} |`
-      );
-    }
-    lines.push("");
-  }
-  lines.push("Use `memory_get` with specific IDs to fetch full observation details.");
-  return lines.join("\n");
-}
-function formatObservationsFull(observations) {
-  if (observations.length === 0) return "No observations found for the given IDs.";
-  const lines = [];
-  for (const obs of observations) {
-    lines.push(`## #${obs.id} \u2014 ${obs.title || "Untitled"}`);
-    lines.push(`**Type:** ${typeIcon(obs.type)} ${obs.type} | **Time:** ${formatTime(obs.created_at)} ${formatDate(obs.created_at)}`);
-    const facts = parseJsonArray(obs.facts);
-    if (facts.length > 0) {
-      lines.push(`**Facts:** ${facts.join("; ")}`);
-    }
-    if (obs.narrative) {
-      lines.push(`**Narrative:** ${obs.narrative}`);
-    }
-    const filesRead = parseJsonArray(obs.files_read);
-    const filesMod = parseJsonArray(obs.files_modified);
-    if (filesRead.length > 0 || filesMod.length > 0) {
-      const parts = [];
-      if (filesRead.length > 0) parts.push(`read: ${filesRead.join(", ")}`);
-      if (filesMod.length > 0) parts.push(`modified: ${filesMod.join(", ")}`);
-      lines.push(`**Files:** ${parts.join(" | ")}`);
-    }
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-function parseJsonArray(json) {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-
-// src/utils/settings.ts
-import { existsSync as existsSync3, readFileSync, writeFileSync } from "fs";
-var DEFAULTS = {
-  WORKER_PORT: 37888,
-  OBSERVATION_COUNT: 50,
-  FULL_OBSERVATION_COUNT: 5,
-  SUMMARY_COUNT: 3,
-  OLLAMA_URL: "http://localhost:11434",
-  OLLAMA_MODEL: "bge-m3"
-};
-var cached = null;
-function getSettings() {
-  if (cached) return cached;
-  const path = getSettingsPath();
-  if (!existsSync3(path)) {
-    writeFileSync(path, JSON.stringify(DEFAULTS, null, 2));
-    cached = { ...DEFAULTS };
-    return cached;
-  }
-  try {
-    const raw2 = JSON.parse(readFileSync(path, "utf-8"));
-    cached = { ...DEFAULTS, ...raw2 };
-    return cached;
-  } catch {
-    cached = { ...DEFAULTS };
-    return cached;
-  }
-}
-function getSetting(key) {
-  const envVal = process.env[`MEMORY_LITE_${key}`];
-  if (envVal !== void 0) {
-    const def = DEFAULTS[key];
-    if (typeof def === "number") return Number(envVal);
-    return envVal;
-  }
-  return getSettings()[key];
-}
-function getAllSettings() {
-  return { ...getSettings() };
-}
-function updateSettings(partial) {
-  const current = getSettings();
-  const updated = { ...current, ...partial };
-  const path = getSettingsPath();
-  writeFileSync(path, JSON.stringify(updated, null, 2));
-  cached = updated;
-  return updated;
-}
-
-// src/context/generator.ts
-function generateContextDetailed(project) {
-  const observationCount = getSetting("OBSERVATION_COUNT");
-  const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
-  const summaryCount = getSetting("SUMMARY_COUNT");
-  const summaries = getRecentSummaries(project, summaryCount);
-  const observations = getRecentObservations(project, observationCount);
-  const detailedIds = observations.slice(0, fullDetailCount).map((o) => o.id);
-  const context = generateContext(project);
-  return {
-    context,
-    estimatedTokens: Math.ceil(context.length / 4),
-    summaries,
-    observations,
-    detailedIds
-  };
-}
-function generateContext(project) {
-  const observationCount = getSetting("OBSERVATION_COUNT");
-  const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
-  const summaryCount = getSetting("SUMMARY_COUNT");
-  const summaries = getRecentSummaries(project, summaryCount);
-  const observations = getRecentObservations(project, observationCount);
-  if (summaries.length === 0 && observations.length === 0) {
-    return "";
-  }
-  const lines = [];
-  lines.push(`<memory-lite-context>`);
-  lines.push(`# Memory Context | ${project}`);
-  lines.push("");
-  if (summaries.length > 0) {
-    lines.push("## Recent Summaries");
-    for (const s of summaries) {
-      const date = new Date(s.created_at).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-      });
-      lines.push(`### ${date} - ${s.request || "Session"}`);
-      if (s.completed) lines.push(`- **Completed:** ${s.completed}`);
-      if (s.learned) lines.push(`- **Learned:** ${s.learned}`);
-      if (s.next_steps) lines.push(`- **Next steps:** ${s.next_steps}`);
-      lines.push("");
-    }
-  }
-  if (observations.length > 0) {
-    lines.push("## Recent Activity");
-    lines.push("| Time | Type | Title | Files |");
-    lines.push("|------|------|-------|-------|");
-    for (const obs of observations) {
-      const time = new Date(obs.created_at).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-      });
-      const files = [
-        ...parseJsonArray2(obs.files_read),
-        ...parseJsonArray2(obs.files_modified)
-      ].map((f) => basename(f)).join(", ");
-      lines.push(`| ${time} | ${obs.type} | ${obs.title || "-"} | ${files || "-"} |`);
-    }
-    lines.push("");
-    const detailed = observations.slice(0, fullDetailCount);
-    if (detailed.length > 0) {
-      lines.push(`## Details (last ${detailed.length})`);
-      for (const obs of detailed) {
-        lines.push(`### #${obs.id} - ${obs.title || "Untitled"}`);
-        const facts = parseJsonArray2(obs.facts);
-        if (facts.length > 0) {
-          lines.push(`**Facts:** ${facts.join("; ")}`);
-        }
-        if (obs.narrative) {
-          lines.push(`**Narrative:** ${obs.narrative}`);
-        }
-        const filesRead = parseJsonArray2(obs.files_read);
-        const filesMod = parseJsonArray2(obs.files_modified);
-        if (filesRead.length > 0 || filesMod.length > 0) {
-          const parts = [];
-          if (filesRead.length > 0) parts.push(`read: ${filesRead.join(", ")}`);
-          if (filesMod.length > 0) parts.push(`modified: ${filesMod.join(", ")}`);
-          lines.push(`**Files:** ${parts.join(" | ")}`);
-        }
-        lines.push("");
-      }
-    }
-  }
-  lines.push("</memory-lite-context>");
-  return lines.join("\n");
-}
-function parseJsonArray2(json) {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
-}
-function basename(path) {
-  return path.split("/").pop() || path;
-}
-
 // src/worker/summarizer.ts
 import { query } from "@anthropic-ai/claude-agent-sdk";
+
+// src/worker/xml-parser.ts
 function extractField(content, fieldName) {
   const regex = new RegExp(`<${fieldName}>([\\s\\S]*?)</${fieldName}>`);
   const match2 = regex.exec(content);
@@ -3590,7 +3320,7 @@ function parseObservationXml(text) {
   const content = match2[1];
   const rawType = extractField(content, "type") || "discovery";
   const type = VALID_TYPES.has(rawType) ? rawType : (() => {
-    logger.warn("summarizer", `Unknown observation type "${rawType}", defaulting to "discovery"`);
+    logger.warn("xml-parser", `Unknown observation type "${rawType}", defaulting to "discovery"`);
     return "discovery";
   })();
   return {
@@ -3615,326 +3345,9 @@ function parseSummaryXml(text) {
     next_steps: extractField(content, "next_steps")
   };
 }
-var OBSERVATION_SYSTEM_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
 
-WHAT TO RECORD \u2014 focus on deliverables and knowledge:
-- What the system NOW DOES differently (new capabilities, fixes, configs)
-- Bugs found with root cause ("X broke because Y")
-- Non-obvious gotchas and workarounds
-- Architecture decisions with rationale
-- API behaviors or quirks discovered
-
-WHEN TO SKIP \u2014 output nothing if the tool use is:
-- Empty status checks, simple file listings, package installs with no errors
-- Repetitive operations already documented
-- File reads that reveal nothing surprising
-- Routine edits with no interesting context (import changes, formatting)
-If skipping, output ONLY: <observation><type>skip</type></observation>
-
-TYPES:
-- bugfix: something was broken, now fixed
-- feature: new capability added
-- refactor: code restructured, behavior unchanged
-- discovery: learning about existing system (only if non-obvious insight)
-- decision: architectural/design choice with rationale
-- change: generic modification (docs, config, misc)
-
-FORMAT:
-\`\`\`xml
-<observation>
-  <type>bugfix | feature | refactor | discovery | decision | change</type>
-  <title>Short title capturing the core action (5-10 words)</title>
-  <facts>
-    <fact>Concise self-contained statement with specifics (filenames, values, behaviors)</fact>
-  </facts>
-  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
-  <files_read>
-    <file>path/to/file</file>
-  </files_read>
-  <files_modified>
-    <file>path/to/file</file>
-  </files_modified>
-</observation>
-\`\`\`
-
-CRITICAL RULES:
-- Record what was LEARNED/BUILT/FIXED, not that you are observing
-- NO generic titles like "File X was read" or "Function Y was added" \u2014 capture the INSIGHT
-- facts must be specific and self-contained (no pronouns, include file paths and values)
-- Output ONLY the XML block, nothing else`;
-var SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary.
-
-Output format:
-\`\`\`xml
-<summary>
-  <request>What the user originally asked for</request>
-  <investigated>What was explored or researched</investigated>
-  <learned>Key findings or discoveries</learned>
-  <completed>What was actually done/implemented</completed>
-  <next_steps>What remains to be done</next_steps>
-</summary>
-\`\`\`
-
-Rules:
-- Be concise (1-3 sentences per field)
-- Focus on actionable information
-- Output ONLY the XML block, nothing else`;
-async function runQuery(systemPrompt, userMessage) {
-  try {
-    const conversation = query({
-      prompt: userMessage,
-      options: {
-        model: "claude-sonnet-4-6",
-        systemPrompt,
-        maxTurns: 1,
-        tools: []
-        // no tools — pure text generation
-      }
-    });
-    let resultText = "";
-    for await (const message of conversation) {
-      if (message.type === "result" && message.subtype === "success") {
-        resultText = message.result;
-      }
-    }
-    return resultText || null;
-  } catch (error) {
-    logger.error("summarizer", "Agent SDK query failed", error);
-    return null;
-  }
-}
-async function extractObservation(toolName, toolInput, toolResponse, cwd) {
-  const userMessage = `Tool: ${toolName}
-Working directory: ${cwd || "unknown"}
-Input: ${truncate2(toolInput, 2e3)}
-Output: ${truncate2(toolResponse, 3e3)}`;
-  const text = await runQuery(OBSERVATION_SYSTEM_PROMPT, userMessage);
-  if (!text) return null;
-  return parseObservationXml(text);
-}
-async function generateSummary(lastAssistantMessage) {
-  const text = await runQuery(SUMMARY_SYSTEM_PROMPT, lastAssistantMessage);
-  if (!text) return null;
-  return parseSummaryXml(text);
-}
-function truncate2(str, maxLen) {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen) + "... [truncated]";
-}
-var CLEANUP_SYSTEM_PROMPT = `You are an extremely aggressive memory quality filter. Your job is to DELETE everything that won't help a developer in a FUTURE session. Only KEEP observations that contain genuinely actionable technical knowledge.
-
-DELETE (the vast majority of items should be deleted):
-- "X was added/created/updated/modified" \u2014 knowing a file was edited is useless, the code itself is the source of truth
-- "Build succeeded/failed" \u2014 ephemeral build status
-- "Task/plan created/updated/completed" \u2014 meta-tooling noise
-- "Tool search performed", "Dependencies found", "File structure explored" \u2014 discovery that leads nowhere specific
-- "Plugin installed/uninstalled", "Worker started/restarted" \u2014 operational noise
-- Self-referential observations about the memory plugin itself being developed (unless they contain a real gotcha)
-- Summaries of sessions where nothing meaningful was accomplished
-- Anything where the title alone tells you everything and there's no deeper insight
-- "X function/component/route was implemented" \u2014 the code exists, no need to remember it was created
-- Redundant entries that repeat information from other items
-- CSS/style changes, import changes, config tweaks \u2014 trivial mechanical edits
-
-KEEP (only if they contain specific technical knowledge you can't easily re-derive):
-- Bugs found with root cause analysis ("X broke because Y")
-- Non-obvious gotchas and workarounds ("matcher must be * because resume sessions are missed")
-- Architecture decisions with rationale ("chose Hono over Express because ESM compatibility")
-- API behaviors or quirks discovered ("Agent SDK doesn't stream tokens despite includePartialMessages")
-- Integration issues between systems
-- Performance findings with specifics
-
-When in doubt, DELETE. A smaller, high-signal context is far more valuable than a large noisy one.
-
-Output format (one line per item, in order):
-<decisions>
-<item id="ID">KEEP|DELETE: reason</item>
-</decisions>`;
-async function reviewForCleanup(items) {
-  if (items.length === 0) return [];
-  const itemList = items.map(
-    (i) => `[${i.type}#${i.id}] ${i.text}`
-  ).join("\n\n");
-  const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
-  if (!text) return [];
-  return parseCleanupResults(text, items);
-}
-function parseCleanupResults(text, items) {
-  const results = [];
-  const itemRegex = /<item id="(?:(?:observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
-  let match2;
-  while ((match2 = itemRegex.exec(text)) !== null) {
-    const id = parseInt(match2[1]);
-    const item = items.find((i) => i.id === id);
-    if (item) {
-      results.push({
-        id,
-        type: item.type,
-        action: match2[2].toLowerCase(),
-        reason: match2[3].trim()
-      });
-    }
-  }
-  return results;
-}
-
-// src/worker/observer.ts
-import { EventEmitter } from "events";
-import { execSync } from "child_process";
-import { existsSync as existsSync4, mkdirSync as mkdirSync2 } from "fs";
-import { join as join3 } from "path";
-import { homedir as homedir2 } from "os";
-import { query as query2 } from "@anthropic-ai/claude-agent-sdk";
-
-// src/db/pending-store.ts
-var STUCK_TIMEOUT_MS = 6e4;
-var MAX_PENDING_PER_SESSION = 200;
-function enqueuePending(contentSessionId, kind, prompt) {
-  const db2 = getDb();
-  const count = getPendingCount(contentSessionId);
-  if (count >= MAX_PENDING_PER_SESSION) {
-    db2.prepare(
-      "DELETE FROM pending_messages WHERE id IN (SELECT id FROM pending_messages WHERE content_session_id = ? ORDER BY id ASC LIMIT 1)"
-    ).run(contentSessionId);
-  }
-  const result = db2.prepare(
-    "INSERT INTO pending_messages (content_session_id, kind, prompt, created_at_epoch) VALUES (?, ?, ?, ?)"
-  ).run(contentSessionId, kind, prompt, Date.now());
-  return Number(result.lastInsertRowid);
-}
-function claimNextPending(contentSessionId) {
-  const db2 = getDb();
-  db2.prepare(
-    "UPDATE pending_messages SET status = ? WHERE content_session_id = ? AND status = ? AND created_at_epoch < ?"
-  ).run("pending", contentSessionId, "processing", Date.now() - STUCK_TIMEOUT_MS);
-  const msg = db2.transaction(() => {
-    const row = db2.prepare(
-      "SELECT * FROM pending_messages WHERE content_session_id = ? AND status = ? ORDER BY id ASC LIMIT 1"
-    ).get(contentSessionId, "pending");
-    if (!row) return null;
-    db2.prepare("UPDATE pending_messages SET status = ?, created_at_epoch = ? WHERE id = ?").run("processing", Date.now(), row.id);
-    return { ...row, status: "processing" };
-  })();
-  return msg;
-}
-function deletePending(id) {
-  getDb().prepare("DELETE FROM pending_messages WHERE id = ?").run(id);
-}
-function forceUnstickAll(contentSessionId) {
-  return getDb().prepare(
-    "UPDATE pending_messages SET status = ? WHERE content_session_id = ? AND status = ?"
-  ).run("pending", contentSessionId, "processing").changes;
-}
-function getPendingCount(contentSessionId) {
-  const row = getDb().prepare(
-    "SELECT COUNT(*) as count FROM pending_messages WHERE content_session_id = ?"
-  ).get(contentSessionId);
-  return row.count;
-}
-function forceUnstickAllGlobal() {
-  return getDb().prepare(
-    "UPDATE pending_messages SET status = 'pending' WHERE status = 'processing'"
-  ).run().changes;
-}
-function getSessionsWithPendingMessages() {
-  const rows = getDb().prepare(
-    "SELECT DISTINCT content_session_id FROM pending_messages"
-  ).all();
-  return rows.map((r) => r.content_session_id);
-}
-
-// src/embeddings/embeddings.ts
-async function generateEmbedding(text) {
-  const ollamaUrl = getSetting("OLLAMA_URL");
-  const model = getSetting("OLLAMA_MODEL");
-  try {
-    const response = await fetch(`${ollamaUrl}/api/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, input: text })
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    if (!data.embeddings?.[0]) return null;
-    return new Float32Array(data.embeddings[0]);
-  } catch {
-    return null;
-  }
-}
-var EXPECTED_EMBEDDING_DIM = 1024;
-function storeEmbedding(db2, observationId, embedding) {
-  if (embedding.length !== EXPECTED_EMBEDDING_DIM) {
-    logger.error("embeddings", `Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
-    return false;
-  }
-  try {
-    db2.prepare(
-      "INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))"
-    ).run(observationId, Buffer.from(embedding.buffer));
-    return true;
-  } catch (error) {
-    logger.error("embeddings", "Failed to store embedding", error);
-    return false;
-  }
-}
-async function searchSemantic(db2, query3, limit = 10) {
-  const embedding = await generateEmbedding(query3);
-  if (!embedding) return [];
-  try {
-    const results = db2.prepare(
-      `SELECT observation_id, distance
-       FROM observations_vec
-       WHERE embedding MATCH vec_f32(?)
-       ORDER BY distance
-       LIMIT ?`
-    ).all(Buffer.from(embedding.buffer), limit);
-    return results.map((r) => ({
-      observationId: r.observation_id,
-      distance: r.distance
-    }));
-  } catch (error) {
-    logger.error("embeddings", "Semantic search failed", error);
-    return [];
-  }
-}
-async function embedObservation(db2, observationId, title, narrative, facts) {
-  const parts = [];
-  if (title) parts.push(title);
-  if (narrative) parts.push(narrative);
-  if (facts.length > 0) parts.push(facts.join(". "));
-  const text = parts.join(" \u2014 ");
-  if (!text) return false;
-  const embedding = await generateEmbedding(text);
-  if (!embedding) return false;
-  return storeEmbedding(db2, observationId, embedding);
-}
-
-// src/worker/observer.ts
-var OBSERVER_SESSIONS_DIR = join3(homedir2(), ".memory-lite", "observer-sessions");
-function ensureObserverSessionsDir() {
-  if (!existsSync4(OBSERVER_SESSIONS_DIR)) {
-    mkdirSync2(OBSERVER_SESSIONS_DIR, { recursive: true });
-  }
-  return OBSERVER_SESSIONS_DIR;
-}
-var cachedClaudePath = null;
-function findClaudeExecutable() {
-  if (cachedClaudePath) return cachedClaudePath;
-  try {
-    cachedClaudePath = execSync("which claude", {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim().split("\n")[0].trim();
-    if (cachedClaudePath) {
-      logger.info("observer", `Found claude executable: ${cachedClaudePath}`);
-      return cachedClaudePath;
-    }
-  } catch {
-    logger.warn("observer", 'Could not find claude executable via "which claude"');
-  }
-  return "claude";
-}
-var SYSTEM_PROMPT = `You are a specialized observer creating searchable memory FOR FUTURE SESSIONS.
+// src/worker/prompts.ts
+var OBSERVER_SYSTEM_PROMPT = `You are a specialized observer creating searchable memory FOR FUTURE SESSIONS.
 
 CRITICAL: Record what was LEARNED/BUILT/FIXED/DEPLOYED/CONFIGURED, not what you (the observer) are doing.
 
@@ -4001,8 +3414,105 @@ OUTPUT FORMAT
 \`\`\`
 
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
+var OBSERVATION_EXTRACTION_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
+
+WHAT TO RECORD \u2014 focus on deliverables and knowledge:
+- What the system NOW DOES differently (new capabilities, fixes, configs)
+- Bugs found with root cause ("X broke because Y")
+- Non-obvious gotchas and workarounds
+- Architecture decisions with rationale
+- API behaviors or quirks discovered
+
+WHEN TO SKIP \u2014 output nothing if the tool use is:
+- Empty status checks, simple file listings, package installs with no errors
+- Repetitive operations already documented
+- File reads that reveal nothing surprising
+- Routine edits with no interesting context (import changes, formatting)
+If skipping, output ONLY: <observation><type>skip</type></observation>
+
+TYPES:
+- bugfix: something was broken, now fixed
+- feature: new capability added
+- refactor: code restructured, behavior unchanged
+- discovery: learning about existing system (only if non-obvious insight)
+- decision: architectural/design choice with rationale
+- change: generic modification (docs, config, misc)
+
+FORMAT:
+\`\`\`xml
+<observation>
+  <type>bugfix | feature | refactor | discovery | decision | change</type>
+  <title>Short title capturing the core action (5-10 words)</title>
+  <facts>
+    <fact>Concise self-contained statement with specifics (filenames, values, behaviors)</fact>
+  </facts>
+  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
+  <files_read>
+    <file>path/to/file</file>
+  </files_read>
+  <files_modified>
+    <file>path/to/file</file>
+  </files_modified>
+</observation>
+\`\`\`
+
+CRITICAL RULES:
+- Record what was LEARNED/BUILT/FIXED, not that you are observing
+- NO generic titles like "File X was read" or "Function Y was added" \u2014 capture the INSIGHT
+- facts must be specific and self-contained (no pronouns, include file paths and values)
+- Output ONLY the XML block, nothing else`;
+var SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary.
+
+Output format:
+\`\`\`xml
+<summary>
+  <request>What the user originally asked for</request>
+  <investigated>What was explored or researched</investigated>
+  <learned>Key findings or discoveries</learned>
+  <completed>What was actually done/implemented</completed>
+  <next_steps>What remains to be done</next_steps>
+</summary>
+\`\`\`
+
+Rules:
+- Be concise (1-3 sentences per field)
+- Focus on actionable information
+- Output ONLY the XML block, nothing else`;
+var CLEANUP_SYSTEM_PROMPT = `You are an extremely aggressive memory quality filter. Your job is to DELETE everything that won't help a developer in a FUTURE session. Only KEEP observations that contain genuinely actionable technical knowledge.
+
+DELETE (the vast majority of items should be deleted):
+- "X was added/created/updated/modified" \u2014 knowing a file was edited is useless, the code itself is the source of truth
+- "Build succeeded/failed" \u2014 ephemeral build status
+- "Task/plan created/updated/completed" \u2014 meta-tooling noise
+- "Tool search performed", "Dependencies found", "File structure explored" \u2014 discovery that leads nowhere specific
+- "Plugin installed/uninstalled", "Worker started/restarted" \u2014 operational noise
+- Self-referential observations about the memory plugin itself being developed (unless they contain a real gotcha)
+- Summaries of sessions where nothing meaningful was accomplished
+- Anything where the title alone tells you everything and there's no deeper insight
+- "X function/component/route was implemented" \u2014 the code exists, no need to remember it was created
+- Redundant entries that repeat information from other items
+- CSS/style changes, import changes, config tweaks \u2014 trivial mechanical edits
+
+KEEP (only if they contain specific technical knowledge you can't easily re-derive):
+- Bugs found with root cause analysis ("X broke because Y")
+- Non-obvious gotchas and workarounds ("matcher must be * because resume sessions are missed")
+- Architecture decisions with rationale ("chose Hono over Express because ESM compatibility")
+- API behaviors or quirks discovered ("Agent SDK doesn't stream tokens despite includePartialMessages")
+- Integration issues between systems
+- Performance findings with specifics
+
+When in doubt, DELETE. A smaller, high-signal context is far more valuable than a large noisy one.
+
+Output format (one line per item, in order):
+<decisions>
+<item id="ID">KEEP|DELETE: reason</item>
+</decisions>`;
+function truncate(str, maxLen) {
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen) + "... [truncated]";
+}
 function buildInitPrompt(project, userPrompt) {
-  return `${SYSTEM_PROMPT}
+  return `${OBSERVER_SYSTEM_PROMPT}
 
 MEMORY PROCESSING START
 =======================
@@ -4014,8 +3524,8 @@ function buildObservationPrompt(toolName, toolInput, toolResponse, cwd) {
   <what_happened>${toolName}</what_happened>
   <occurred_at>${(/* @__PURE__ */ new Date()).toISOString()}</occurred_at>${cwd ? `
   <working_directory>${cwd}</working_directory>` : ""}
-  <parameters>${truncate3(toolInput, 2e3)}</parameters>
-  <outcome>${truncate3(toolResponse, 3e3)}</outcome>
+  <parameters>${truncate(toolInput, 2e3)}</parameters>
+  <outcome>${truncate(toolResponse, 3e3)}</outcome>
 </observed_from_primary_session>`;
 }
 function buildSummaryPrompt(lastAssistantMessage) {
@@ -4026,7 +3536,7 @@ Your response MUST use <summary> tags ONLY.
 Write progress notes of what was done, what was learned, and what's next.
 
 Claude's Full Response to User:
-${truncate3(lastAssistantMessage, 5e3)}
+${truncate(lastAssistantMessage, 5e3)}
 
 Respond in this XML format:
 <summary>
@@ -4039,12 +3549,143 @@ Respond in this XML format:
 
 Output ONLY the summary XML, nothing else.`;
 }
-function truncate3(str, maxLen) {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen) + "... [truncated]";
+
+// src/worker/summarizer.ts
+async function runQuery(systemPrompt, userMessage) {
+  try {
+    const conversation = query({
+      prompt: userMessage,
+      options: {
+        model: "claude-sonnet-4-6",
+        systemPrompt,
+        maxTurns: 1,
+        tools: []
+        // no tools — pure text generation
+      }
+    });
+    let resultText = "";
+    for await (const message of conversation) {
+      if (message.type === "result" && message.subtype === "success") {
+        resultText = message.result;
+      }
+    }
+    return resultText || null;
+  } catch (error) {
+    logger.error("summarizer", "Agent SDK query failed", error);
+    return null;
+  }
 }
+async function extractObservation(toolName, toolInput, toolResponse, cwd) {
+  const userMessage = `Tool: ${toolName}
+Working directory: ${cwd || "unknown"}
+Input: ${truncate(toolInput, 2e3)}
+Output: ${truncate(toolResponse, 3e3)}`;
+  const text = await runQuery(OBSERVATION_EXTRACTION_PROMPT, userMessage);
+  if (!text) return null;
+  return parseObservationXml(text);
+}
+async function generateSummary(lastAssistantMessage) {
+  const text = await runQuery(SUMMARY_SYSTEM_PROMPT, lastAssistantMessage);
+  if (!text) return null;
+  return parseSummaryXml(text);
+}
+async function reviewForCleanup(items) {
+  if (items.length === 0) return [];
+  const itemList = items.map(
+    (i) => `[${i.type}#${i.id}] ${i.text}`
+  ).join("\n\n");
+  const text = await runQuery(CLEANUP_SYSTEM_PROMPT, itemList);
+  if (!text) return [];
+  return parseCleanupResults(text, items);
+}
+function parseCleanupResults(text, items) {
+  const results = [];
+  const itemRegex = /<item id="(?:(?:observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  let match2;
+  while ((match2 = itemRegex.exec(text)) !== null) {
+    const id = parseInt(match2[1]);
+    const item = items.find((i) => i.id === id);
+    if (item) {
+      results.push({
+        id,
+        type: item.type,
+        action: match2[2].toLowerCase(),
+        reason: match2[3].trim()
+      });
+    }
+  }
+  return results;
+}
+
+// src/worker/observer.ts
+import { execSync } from "child_process";
+import { existsSync as existsSync4, mkdirSync as mkdirSync2 } from "fs";
+import { join as join3 } from "path";
+import { homedir as homedir2 } from "os";
+import { query as query2 } from "@anthropic-ai/claude-agent-sdk";
+
+// src/worker/durable-queue.ts
+import { EventEmitter } from "events";
+
+// src/db/pending-store.ts
+var STUCK_TIMEOUT_MS = 6e4;
+var MAX_PENDING_PER_SESSION = 200;
+function enqueuePending(contentSessionId, kind, prompt) {
+  const db2 = getDb();
+  const count = getPendingCount(contentSessionId);
+  if (count >= MAX_PENDING_PER_SESSION) {
+    db2.prepare(
+      "DELETE FROM pending_messages WHERE id IN (SELECT id FROM pending_messages WHERE content_session_id = ? ORDER BY id ASC LIMIT 1)"
+    ).run(contentSessionId);
+  }
+  const result = db2.prepare(
+    "INSERT INTO pending_messages (content_session_id, kind, prompt, created_at_epoch) VALUES (?, ?, ?, ?)"
+  ).run(contentSessionId, kind, prompt, Date.now());
+  return Number(result.lastInsertRowid);
+}
+function claimNextPending(contentSessionId) {
+  const db2 = getDb();
+  db2.prepare(
+    "UPDATE pending_messages SET status = ? WHERE content_session_id = ? AND status = ? AND created_at_epoch < ?"
+  ).run("pending", contentSessionId, "processing", Date.now() - STUCK_TIMEOUT_MS);
+  const msg = db2.transaction(() => {
+    const row = db2.prepare(
+      "SELECT * FROM pending_messages WHERE content_session_id = ? AND status = ? ORDER BY id ASC LIMIT 1"
+    ).get(contentSessionId, "pending");
+    if (!row) return null;
+    db2.prepare("UPDATE pending_messages SET status = ?, created_at_epoch = ? WHERE id = ?").run("processing", Date.now(), row.id);
+    return { ...row, status: "processing" };
+  })();
+  return msg;
+}
+function deletePending(id) {
+  getDb().prepare("DELETE FROM pending_messages WHERE id = ?").run(id);
+}
+function forceUnstickAll(contentSessionId) {
+  return getDb().prepare(
+    "UPDATE pending_messages SET status = ? WHERE content_session_id = ? AND status = ?"
+  ).run("pending", contentSessionId, "processing").changes;
+}
+function getPendingCount(contentSessionId) {
+  const row = getDb().prepare(
+    "SELECT COUNT(*) as count FROM pending_messages WHERE content_session_id = ?"
+  ).get(contentSessionId);
+  return row.count;
+}
+function forceUnstickAllGlobal() {
+  return getDb().prepare(
+    "UPDATE pending_messages SET status = 'pending' WHERE status = 'processing'"
+  ).run().changes;
+}
+function getSessionsWithPendingMessages() {
+  const rows = getDb().prepare(
+    "SELECT DISTINCT content_session_id FROM pending_messages"
+  ).all();
+  return rows.map((r) => r.content_session_id);
+}
+
+// src/worker/durable-queue.ts
 var IDLE_TIMEOUT_MS = 3 * 60 * 1e3;
-var MAX_RESTARTS = 3;
 var DurableQueue = class {
   emitter = new EventEmitter();
   closed = false;
@@ -4119,6 +3760,280 @@ var DurableQueue = class {
     logger.info("queue", `Iterator exited (iter=${iterCount}, closed=${this.closed}, aborted=${this.signal?.aborted}) for ${this.contentSessionId}`);
   }
 };
+
+// src/utils/settings.ts
+import { existsSync as existsSync3, readFileSync, writeFileSync } from "fs";
+var DEFAULTS = {
+  WORKER_PORT: 37888,
+  OBSERVATION_COUNT: 50,
+  FULL_OBSERVATION_COUNT: 5,
+  SUMMARY_COUNT: 3,
+  OLLAMA_URL: "http://localhost:11434",
+  OLLAMA_MODEL: "bge-m3"
+};
+var cached = null;
+function getSettings() {
+  if (cached) return cached;
+  const path = getSettingsPath();
+  if (!existsSync3(path)) {
+    writeFileSync(path, JSON.stringify(DEFAULTS, null, 2));
+    cached = { ...DEFAULTS };
+    return cached;
+  }
+  try {
+    const raw2 = JSON.parse(readFileSync(path, "utf-8"));
+    cached = { ...DEFAULTS, ...raw2 };
+    return cached;
+  } catch {
+    cached = { ...DEFAULTS };
+    return cached;
+  }
+}
+function getSetting(key) {
+  const envVal = process.env[`MEMORY_LITE_${key}`];
+  if (envVal !== void 0) {
+    const def = DEFAULTS[key];
+    if (typeof def === "number") return Number(envVal);
+    return envVal;
+  }
+  return getSettings()[key];
+}
+function getAllSettings() {
+  return { ...getSettings() };
+}
+function updateSettings(partial) {
+  const current = getSettings();
+  const updated = { ...current, ...partial };
+  const path = getSettingsPath();
+  writeFileSync(path, JSON.stringify(updated, null, 2));
+  cached = updated;
+  return updated;
+}
+
+// src/embeddings/embeddings.ts
+async function generateEmbedding(text) {
+  const ollamaUrl = getSetting("OLLAMA_URL");
+  const model = getSetting("OLLAMA_MODEL");
+  try {
+    const response = await fetch(`${ollamaUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, input: text })
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!data.embeddings?.[0]) return null;
+    return new Float32Array(data.embeddings[0]);
+  } catch {
+    return null;
+  }
+}
+var EXPECTED_EMBEDDING_DIM = 1024;
+function storeEmbedding(db2, observationId, embedding) {
+  if (embedding.length !== EXPECTED_EMBEDDING_DIM) {
+    logger.error("embeddings", `Dimension mismatch: got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIM}. Skipping storage.`);
+    return false;
+  }
+  try {
+    db2.prepare(
+      "INSERT OR REPLACE INTO observations_vec (observation_id, embedding) VALUES (CAST(? AS INTEGER), vec_f32(?))"
+    ).run(observationId, Buffer.from(embedding.buffer));
+    return true;
+  } catch (error) {
+    logger.error("embeddings", "Failed to store embedding", error);
+    return false;
+  }
+}
+async function searchSemantic(db2, query3, limit = 10) {
+  const embedding = await generateEmbedding(query3);
+  if (!embedding) return [];
+  try {
+    const results = db2.prepare(
+      `SELECT observation_id, distance
+       FROM observations_vec
+       WHERE embedding MATCH vec_f32(?)
+       ORDER BY distance
+       LIMIT ?`
+    ).all(Buffer.from(embedding.buffer), limit);
+    return results.map((r) => ({
+      observationId: r.observation_id,
+      distance: r.distance
+    }));
+  } catch (error) {
+    logger.error("embeddings", "Semantic search failed", error);
+    return [];
+  }
+}
+async function embedObservation(db2, observationId, title, narrative, facts) {
+  const parts = [];
+  if (title) parts.push(title);
+  if (narrative) parts.push(narrative);
+  if (facts.length > 0) parts.push(facts.join(". "));
+  const text = parts.join(" \u2014 ");
+  if (!text) return false;
+  const embedding = await generateEmbedding(text);
+  if (!embedding) return false;
+  return storeEmbedding(db2, observationId, embedding);
+}
+
+// src/worker/message-processor.ts
+function processMessage(msg, text, contentSessionId, pendingResults) {
+  if (msg.kind === "observation" && text) {
+    processObservation(msg, text, contentSessionId, pendingResults);
+  } else if (msg.kind === "summary" && text) {
+    processSummary(msg, text, contentSessionId, pendingResults);
+  } else {
+    deletePending(msg.id);
+    resolvePending(msg.id, null, pendingResults);
+  }
+}
+function processObservation(msg, text, contentSessionId, pendingResults) {
+  const parsed = parseObservationXml(text);
+  if (parsed && parsed.type !== "skip") {
+    const session = getSessionByContentId(contentSessionId);
+    if (session) {
+      try {
+        const result = storeObservation(session.id, session.project, parsed, contentSessionId);
+        deletePending(msg.id);
+        if (!result.deduplicated) {
+          embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("message-processor", "embedding failed", err));
+        }
+      } catch (err) {
+        logger.error("message-processor", "Failed to store observation", err);
+        return;
+      }
+    } else {
+      deletePending(msg.id);
+    }
+  } else {
+    deletePending(msg.id);
+  }
+  resolvePending(msg.id, parsed ?? null, pendingResults);
+}
+function processSummary(msg, text, contentSessionId, pendingResults) {
+  const parsed = parseSummaryXml(text);
+  if (parsed) {
+    const session = getSessionByContentId(contentSessionId);
+    if (session) {
+      try {
+        storeSummary(session.id, session.project, parsed);
+        deletePending(msg.id);
+      } catch (err) {
+        logger.error("message-processor", "Failed to store summary", err);
+        return;
+      }
+    } else {
+      deletePending(msg.id);
+    }
+  } else {
+    deletePending(msg.id);
+  }
+  resolvePending(msg.id, parsed ?? null, pendingResults);
+}
+function resolvePending(msgId, value, pendingResults) {
+  const pending = pendingResults.get(msgId);
+  if (pending) {
+    pendingResults.delete(msgId);
+    pending.resolve(value);
+  }
+}
+function extractAssistantText(message) {
+  const content = message?.message?.content;
+  if (Array.isArray(content)) {
+    return content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+  }
+  return typeof content === "string" ? content : "";
+}
+
+// src/worker/observer-registry.ts
+var activeSessions = /* @__PURE__ */ new Map();
+var creatingSessions = /* @__PURE__ */ new Set();
+function registerObserver(contentSessionId, session) {
+  activeSessions.set(contentSessionId, session);
+}
+function getOrCreateObserver(contentSessionId, project, userPrompt) {
+  let session = activeSessions.get(contentSessionId);
+  if (session && !session.isDestroyed()) return session;
+  if (creatingSessions.has(contentSessionId)) {
+    session = activeSessions.get(contentSessionId);
+    if (session && !session.isDestroyed()) return session;
+  }
+  creatingSessions.add(contentSessionId);
+  const staleMemorySessionId = getMemorySessionId(contentSessionId);
+  if (staleMemorySessionId) {
+    logger.warn("observer", `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
+  }
+  const hasPending = getPendingCount(contentSessionId) > 0;
+  if (hasPending) {
+    const unstuck = forceUnstickAll(contentSessionId);
+    if (unstuck > 0) logger.info("observer", `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+  }
+  try {
+    session = new ObserverSession(contentSessionId, project, userPrompt, null, 0, registerObserver);
+    activeSessions.set(contentSessionId, session);
+    logger.info("observer", `Created session for ${contentSessionId} (project: ${project})`);
+    return session;
+  } finally {
+    creatingSessions.delete(contentSessionId);
+  }
+}
+function getObserver(contentSessionId) {
+  const session = activeSessions.get(contentSessionId);
+  if (session?.isDestroyed()) {
+    activeSessions.delete(contentSessionId);
+    return void 0;
+  }
+  return session;
+}
+function destroyObserver(contentSessionId) {
+  const session = activeSessions.get(contentSessionId);
+  if (session) {
+    session.destroy();
+    activeSessions.delete(contentSessionId);
+    logger.info("observer", `Destroyed session for ${contentSessionId}`);
+  }
+}
+function destroyAllObservers() {
+  for (const [, session] of activeSessions) {
+    session.destroy();
+  }
+  activeSessions.clear();
+}
+function getActiveSessionIds() {
+  return Array.from(activeSessions.keys());
+}
+function getSessionAge(contentSessionId) {
+  const session = activeSessions.get(contentSessionId);
+  if (!session) return Infinity;
+  return Date.now() - session.lastActivityTime;
+}
+
+// src/worker/observer.ts
+var OBSERVER_SESSIONS_DIR = join3(homedir2(), ".memory-lite", "observer-sessions");
+function ensureObserverSessionsDir() {
+  if (!existsSync4(OBSERVER_SESSIONS_DIR)) {
+    mkdirSync2(OBSERVER_SESSIONS_DIR, { recursive: true });
+  }
+  return OBSERVER_SESSIONS_DIR;
+}
+var cachedClaudePath = null;
+function findClaudeExecutable() {
+  if (cachedClaudePath) return cachedClaudePath;
+  try {
+    cachedClaudePath = execSync("which claude", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim().split("\n")[0].trim();
+    if (cachedClaudePath) {
+      logger.info("observer", `Found claude executable: ${cachedClaudePath}`);
+      return cachedClaudePath;
+    }
+  } catch {
+    logger.warn("observer", 'Could not find claude executable via "which claude"');
+  }
+  return "claude";
+}
+var MAX_RESTARTS = 3;
 var ObserverSession = class _ObserverSession {
   queue;
   pendingResults = /* @__PURE__ */ new Map();
@@ -4127,14 +4042,17 @@ var ObserverSession = class _ObserverSession {
   abortController = new AbortController();
   restartCount;
   conversation = null;
+  onReplace;
   lastActivityTime = Date.now();
   contentSessionId;
   project;
-  constructor(contentSessionId, project, userPrompt, memorySessionId, restartCount = 0) {
+  constructor(contentSessionId, project, userPrompt, memorySessionId, restartCount = 0, onReplace) {
     this.contentSessionId = contentSessionId;
     this.project = project;
     this.memorySessionId = memorySessionId || null;
     this.restartCount = restartCount;
+    this.onReplace = onReplace || (() => {
+    });
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
     const unstuck = forceUnstickAll(contentSessionId);
     if (unstuck > 0) logger.info("observer", `Constructor unstuck ${unstuck} messages for ${contentSessionId}`);
@@ -4267,14 +4185,13 @@ var ObserverSession = class _ObserverSession {
             logger.info("observer", `${prev ? "Updated" : "Captured"} memorySessionId for ${this.contentSessionId}`);
           }
           if (message.type === "assistant") {
-            const content = message.message?.content;
-            const text = Array.isArray(content) ? content.filter((c) => c.type === "text").map((c) => c.text).join("\n") : typeof content === "string" ? content : "";
+            const text = extractAssistantText(message);
             if (text.length > 0) {
               logger.info("observer", `Assistant response (${text.length} chars) for ${this.contentSessionId}`);
             }
             if (processingMsgs.length > 0 && text) {
               const msg = processingMsgs.shift();
-              this.resolveAndCleanup(msg, text);
+              processMessage(msg, text, this.contentSessionId, this.pendingResults);
             }
           }
           if (message.type === "result") {
@@ -4295,7 +4212,7 @@ var ObserverSession = class _ObserverSession {
       if (processingMsgs.length > 0) {
         logger.info("observer", `Resolving ${processingMsgs.length} leftover pending msgs with empty text`);
         for (const leftover of processingMsgs) {
-          this.resolveAndCleanup(leftover, "");
+          processMessage(leftover, "", this.contentSessionId, this.pendingResults);
         }
         processingMsgs.length = 0;
       }
@@ -4323,9 +4240,10 @@ var ObserverSession = class _ObserverSession {
           this.project,
           void 0,
           this.memorySessionId,
-          this.restartCount + 1
+          this.restartCount + 1,
+          this.onReplace
         );
-        activeSessions.set(this.contentSessionId, replacement);
+        this.onReplace(this.contentSessionId, replacement);
       } else {
         if (remainingCount > 0) {
           logger.warn("observer", `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
@@ -4334,124 +4252,7 @@ var ObserverSession = class _ObserverSession {
       }
     }
   }
-  resolveAndCleanup(msg, text) {
-    if (msg.kind === "observation" && text) {
-      const parsed = parseObservationXml(text);
-      if (parsed && parsed.type !== "skip") {
-        const session = getSessionByContentId(this.contentSessionId);
-        if (session) {
-          try {
-            const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
-            deletePending(msg.id);
-            if (!result.deduplicated) {
-              embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("observer", "embedding failed", err));
-            }
-          } catch (err) {
-            logger.error("observer", "Failed to store observation", err);
-            return;
-          }
-        } else {
-          deletePending(msg.id);
-        }
-      } else {
-        deletePending(msg.id);
-      }
-      const pending = this.pendingResults.get(msg.id);
-      if (pending) {
-        this.pendingResults.delete(msg.id);
-        pending.resolve(parsed ?? null);
-      }
-    } else if (msg.kind === "summary" && text) {
-      const parsed = parseSummaryXml(text);
-      if (parsed) {
-        const session = getSessionByContentId(this.contentSessionId);
-        if (session) {
-          try {
-            storeSummary(session.id, session.project, parsed);
-            deletePending(msg.id);
-          } catch (err) {
-            logger.error("observer", "Failed to store summary", err);
-            return;
-          }
-        } else {
-          deletePending(msg.id);
-        }
-      } else {
-        deletePending(msg.id);
-      }
-      const pending = this.pendingResults.get(msg.id);
-      if (pending) {
-        this.pendingResults.delete(msg.id);
-        pending.resolve(parsed ?? null);
-      }
-    } else {
-      deletePending(msg.id);
-      const pending = this.pendingResults.get(msg.id);
-      if (pending) {
-        this.pendingResults.delete(msg.id);
-        pending.resolve(null);
-      }
-    }
-  }
 };
-var activeSessions = /* @__PURE__ */ new Map();
-var creatingSessions = /* @__PURE__ */ new Set();
-function getOrCreateObserver(contentSessionId, project, userPrompt) {
-  let session = activeSessions.get(contentSessionId);
-  if (session && !session.isDestroyed()) return session;
-  if (creatingSessions.has(contentSessionId)) {
-    session = activeSessions.get(contentSessionId);
-    if (session && !session.isDestroyed()) return session;
-  }
-  creatingSessions.add(contentSessionId);
-  const staleMemorySessionId = getMemorySessionId(contentSessionId);
-  if (staleMemorySessionId) {
-    logger.warn("observer", `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
-  }
-  const hasPending = getPendingCount(contentSessionId) > 0;
-  if (hasPending) {
-    const unstuck = forceUnstickAll(contentSessionId);
-    if (unstuck > 0) logger.info("observer", `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
-  }
-  try {
-    session = new ObserverSession(contentSessionId, project, userPrompt, null);
-    activeSessions.set(contentSessionId, session);
-    logger.info("observer", `Created session for ${contentSessionId} (project: ${project})`);
-    return session;
-  } finally {
-    creatingSessions.delete(contentSessionId);
-  }
-}
-function getObserver(contentSessionId) {
-  const session = activeSessions.get(contentSessionId);
-  if (session?.isDestroyed()) {
-    activeSessions.delete(contentSessionId);
-    return void 0;
-  }
-  return session;
-}
-function destroyObserver(contentSessionId) {
-  const session = activeSessions.get(contentSessionId);
-  if (session) {
-    session.destroy();
-    activeSessions.delete(contentSessionId);
-    logger.info("observer", `Destroyed session for ${contentSessionId}`);
-  }
-}
-function destroyAllObservers() {
-  for (const [, session] of activeSessions) {
-    session.destroy();
-  }
-  activeSessions.clear();
-}
-function getActiveSessionIds() {
-  return Array.from(activeSessions.keys());
-}
-function getSessionAge(contentSessionId) {
-  const session = activeSessions.get(contentSessionId);
-  if (!session) return Infinity;
-  return Date.now() - session.lastActivityTime;
-}
 
 // src/utils/privacy.ts
 function stripPrivateTags(content) {
@@ -4461,37 +4262,9 @@ function isEntirelyPrivate(content) {
   return stripPrivateTags(content).length === 0;
 }
 
-// src/worker/routes.ts
-var app = new Hono2();
-var MAX_LIMIT = 500;
-var MAX_DEPTH = 50;
-var MAX_BATCH = 100;
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-function safeParseInt(value, fallback) {
-  if (!value) return fallback;
-  const n = parseInt(value, 10);
-  return isNaN(n) ? fallback : n;
-}
-app.get("/api/health", (c) => c.json({ ok: true }));
-app.get("/api/readiness", (c) => {
-  if (!isDbReady()) {
-    return c.json({ ok: false, reason: "DB not initialized" }, 503);
-  }
-  return c.json({ ok: true });
-});
-app.get("/api/context", (c) => {
-  try {
-    const project = c.req.query("project") || "unknown";
-    const context = generateContext(project);
-    return c.json({ context });
-  } catch (error) {
-    logger.error("routes", "/api/context error", error);
-    return c.json({ error: "Failed to generate context" }, 500);
-  }
-});
-app.post("/api/sessions", async (c) => {
+// src/worker/routes/sessions.ts
+var sessionRoutes = new Hono2();
+sessionRoutes.post("/sessions", async (c) => {
   try {
     const { contentSessionId, project, prompt } = await c.req.json();
     if (!contentSessionId) return c.json({ error: "contentSessionId required" }, 400);
@@ -4507,7 +4280,19 @@ app.post("/api/sessions", async (c) => {
     return c.json({ error: "Failed to create session" }, 500);
   }
 });
-app.post("/api/observations", async (c) => {
+sessionRoutes.post("/sessions/complete", async (c) => {
+  try {
+    const { contentSessionId } = await c.req.json();
+    if (!contentSessionId) return c.json({ error: "contentSessionId required" }, 400);
+    completeSession(contentSessionId);
+    destroyObserver(contentSessionId);
+    return c.json({ ok: true });
+  } catch (error) {
+    logger.error("routes", "/api/sessions/complete error", error);
+    return c.json({ error: "Failed to complete session" }, 500);
+  }
+});
+sessionRoutes.post("/observations", async (c) => {
   try {
     const { contentSessionId, tool_name, tool_input, tool_response, cwd } = await c.req.json();
     if (!contentSessionId || !tool_name) {
@@ -4538,7 +4323,7 @@ app.post("/api/observations", async (c) => {
     return c.json({ error: "Failed to store observation" }, 500);
   }
 });
-app.post("/api/summarize", async (c) => {
+sessionRoutes.post("/summarize", async (c) => {
   try {
     const { contentSessionId, last_assistant_message } = await c.req.json();
     if (!contentSessionId) return c.json({ error: "contentSessionId required" }, 400);
@@ -4570,19 +4355,328 @@ app.post("/api/summarize", async (c) => {
     return c.json({ error: "Failed to generate summary" }, 500);
   }
 });
-app.post("/api/sessions/complete", async (c) => {
+
+// src/worker/formatter.ts
+var TYPE_ICONS = {
+  bugfix: "\u{1F534}",
+  feature: "\u{1F7E2}",
+  refactor: "\u{1F7E3}",
+  discovery: "\u{1F535}",
+  decision: "\u{1F9E0}",
+  change: "\u26AA"
+};
+function typeIcon(type) {
+  return TYPE_ICONS[type] || "\u26AA";
+}
+function truncate2(text, max) {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 3) + "...";
+}
+function estimateTokens(obs) {
+  const size = (obs.title || "").length + (obs.narrative || "").length + (obs.facts || "").length;
+  return Math.ceil(size / 4);
+}
+function formatTime(isoDate) {
+  return new Date(isoDate).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true
+  });
+}
+function formatDate(isoDate) {
+  return new Date(isoDate).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric"
+  });
+}
+function formatSearchIndex(results) {
+  if (results.length === 0) return "No results found.";
+  const lines = [];
+  lines.push(`Found ${results.length} result(s):
+`);
+  lines.push("| ID | Time | T | Title | ~Tokens |");
+  lines.push("|----|------|---|-------|---------|");
+  let lastTime = "";
+  for (const r of results) {
+    const time = formatTime(r.created_at);
+    const displayTime = time === lastTime ? "\u2033" : time;
+    lastTime = time;
+    lines.push(
+      `| #${r.id} | ${displayTime} | ${typeIcon(r.type)} | ${truncate2(r.title || "Untitled", 60)} | ~${estimateTokens(r)} |`
+    );
+  }
+  lines.push("");
+  lines.push("Use `memory_timeline` with an ID to see context, or `memory_get` with IDs to fetch full details.");
+  return lines.join("\n");
+}
+function formatTimeline(before, anchor, after) {
+  const all = [...before, anchor, ...after];
+  const lines = [];
+  lines.push(`Timeline around #${anchor.id}: "${anchor.title || "Untitled"}"
+`);
+  lines.push(`${before.length} before \u2192 anchor \u2192 ${after.length} after
+`);
+  const byDay = /* @__PURE__ */ new Map();
+  for (const obs of all) {
+    const day = formatDate(obs.created_at);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push({ obs, isAnchor: obs.id === anchor.id });
+  }
+  for (const [day, items] of byDay) {
+    lines.push(`### ${day}`);
+    lines.push("| ID | Time | T | Title | ~Tokens |");
+    lines.push("|----|------|---|-------|---------|");
+    let lastTime = "";
+    for (const { obs, isAnchor } of items) {
+      const time = formatTime(obs.created_at);
+      const displayTime = time === lastTime ? "\u2033" : time;
+      lastTime = time;
+      const marker = isAnchor ? " \u2190 **ANCHOR**" : "";
+      lines.push(
+        `| #${obs.id} | ${displayTime} | ${typeIcon(obs.type)} | ${truncate2(obs.title || "Untitled", 60)}${marker} | ~${estimateTokens(obs)} |`
+      );
+    }
+    lines.push("");
+  }
+  lines.push("Use `memory_get` with specific IDs to fetch full observation details.");
+  return lines.join("\n");
+}
+function formatObservationsFull(observations) {
+  if (observations.length === 0) return "No observations found for the given IDs.";
+  const lines = [];
+  for (const obs of observations) {
+    lines.push(`## #${obs.id} \u2014 ${obs.title || "Untitled"}`);
+    lines.push(`**Type:** ${typeIcon(obs.type)} ${obs.type} | **Time:** ${formatTime(obs.created_at)} ${formatDate(obs.created_at)}`);
+    const facts = parseJsonArray(obs.facts);
+    if (facts.length > 0) {
+      lines.push(`**Facts:** ${facts.join("; ")}`);
+    }
+    if (obs.narrative) {
+      lines.push(`**Narrative:** ${obs.narrative}`);
+    }
+    const filesRead = parseJsonArray(obs.files_read);
+    const filesMod = parseJsonArray(obs.files_modified);
+    if (filesRead.length > 0 || filesMod.length > 0) {
+      const parts = [];
+      if (filesRead.length > 0) parts.push(`read: ${filesRead.join(", ")}`);
+      if (filesMod.length > 0) parts.push(`modified: ${filesMod.join(", ")}`);
+      lines.push(`**Files:** ${parts.join(" | ")}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+function parseJsonArray(json) {
+  if (!json) return [];
   try {
-    const { contentSessionId } = await c.req.json();
-    if (!contentSessionId) return c.json({ error: "contentSessionId required" }, 400);
-    completeSession(contentSessionId);
-    destroyObserver(contentSessionId);
-    return c.json({ ok: true });
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+// src/worker/routes/utils.ts
+var MAX_LIMIT = 500;
+var MAX_DEPTH = 50;
+var MAX_BATCH = 100;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+function safeParseInt(value, fallback) {
+  if (!value) return fallback;
+  const n = parseInt(value, 10);
+  return isNaN(n) ? fallback : n;
+}
+
+// src/worker/routes/search.ts
+var searchRoutes = new Hono2();
+searchRoutes.get("/search/index", (c) => {
+  try {
+    const q = c.req.query("q");
+    if (!q) return c.json({ error: "q parameter required" }, 400);
+    const results = searchObservationsIndex({
+      query: q,
+      project: c.req.query("project"),
+      type: c.req.query("type"),
+      dateStart: c.req.query("dateStart"),
+      dateEnd: c.req.query("dateEnd"),
+      limit: clamp(safeParseInt(c.req.query("limit"), 20), 1, MAX_LIMIT),
+      offset: Math.max(0, safeParseInt(c.req.query("offset"), 0))
+    });
+    const formatted = formatSearchIndex(results);
+    return c.json({ content: [{ type: "text", text: formatted }] });
   } catch (error) {
-    logger.error("routes", "/api/sessions/complete error", error);
-    return c.json({ error: "Failed to complete session" }, 500);
+    logger.error("routes", "/api/search/index error", error);
+    return c.json({ error: "Search failed" }, 500);
   }
 });
-app.get("/api/dashboard/sessions", (c) => {
+searchRoutes.get("/timeline", (c) => {
+  try {
+    const anchorId = safeParseInt(c.req.query("anchor"), NaN);
+    if (isNaN(anchorId)) return c.json({ error: "anchor parameter required (observation ID)" }, 400);
+    const depthBefore = clamp(safeParseInt(c.req.query("depth_before"), 5), 1, MAX_DEPTH);
+    const depthAfter = clamp(safeParseInt(c.req.query("depth_after"), 5), 1, MAX_DEPTH);
+    const project = c.req.query("project");
+    const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
+    if (!anchor) return c.json({ error: "Observation not found" }, 404);
+    const formatted = formatTimeline(before, anchor, after);
+    return c.json({ content: [{ type: "text", text: formatted }] });
+  } catch (error) {
+    logger.error("routes", "/api/timeline error", error);
+    return c.json({ error: "Timeline failed" }, 500);
+  }
+});
+searchRoutes.post("/observations/batch", async (c) => {
+  try {
+    const { ids } = await c.req.json();
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return c.json({ error: "ids array required" }, 400);
+    }
+    if (ids.length > MAX_BATCH) {
+      return c.json({ error: `Too many IDs (max ${MAX_BATCH})` }, 400);
+    }
+    const observations = getObservationsByIds(ids.map(Number));
+    const formatted = formatObservationsFull(observations);
+    return c.json({ content: [{ type: "text", text: formatted }] });
+  } catch (error) {
+    logger.error("routes", "/api/observations/batch error", error);
+    return c.json({ error: "Batch fetch failed" }, 500);
+  }
+});
+searchRoutes.get("/search", async (c) => {
+  try {
+    const q = c.req.query("q");
+    const project = c.req.query("project");
+    const mode = c.req.query("mode") || "fts";
+    const limit = clamp(safeParseInt(c.req.query("limit"), 10), 1, MAX_LIMIT);
+    if (!q) return c.json({ error: "q parameter required" }, 400);
+    if (mode === "semantic") {
+      const vecResults = await searchSemantic(getDb(), q, limit);
+      if (vecResults.length === 0) {
+        return c.json({ results: [], mode: "semantic", message: "No results (Ollama may be unavailable)" });
+      }
+      const db2 = getDb();
+      const enriched = vecResults.map((r) => {
+        const obs = db2.prepare("SELECT * FROM observations WHERE id = ?").get(r.observationId);
+        return obs ? { ...obs, distance: r.distance } : null;
+      }).filter(Boolean);
+      return c.json({ results: enriched, mode: "semantic" });
+    }
+    const results = searchObservationsFts(q, project, limit);
+    return c.json({ results, mode: "fts" });
+  } catch (error) {
+    logger.error("routes", "/api/search error", error);
+    return c.json({ error: "Search failed" }, 500);
+  }
+});
+
+// src/context/generator.ts
+function generateContextDetailed(project) {
+  const observationCount = getSetting("OBSERVATION_COUNT");
+  const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
+  const summaryCount = getSetting("SUMMARY_COUNT");
+  const summaries = getRecentSummaries(project, summaryCount);
+  const observations = getRecentObservations(project, observationCount);
+  const detailedIds = observations.slice(0, fullDetailCount).map((o) => o.id);
+  const context = generateContext(project);
+  return {
+    context,
+    estimatedTokens: Math.ceil(context.length / 4),
+    summaries,
+    observations,
+    detailedIds
+  };
+}
+function generateContext(project) {
+  const observationCount = getSetting("OBSERVATION_COUNT");
+  const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
+  const summaryCount = getSetting("SUMMARY_COUNT");
+  const summaries = getRecentSummaries(project, summaryCount);
+  const observations = getRecentObservations(project, observationCount);
+  if (summaries.length === 0 && observations.length === 0) {
+    return "";
+  }
+  const lines = [];
+  lines.push(`<memory-lite-context>`);
+  lines.push(`# Memory Context | ${project}`);
+  lines.push("");
+  if (summaries.length > 0) {
+    lines.push("## Recent Summaries");
+    for (const s of summaries) {
+      const date = new Date(s.created_at).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      });
+      lines.push(`### ${date} - ${s.request || "Session"}`);
+      if (s.completed) lines.push(`- **Completed:** ${s.completed}`);
+      if (s.learned) lines.push(`- **Learned:** ${s.learned}`);
+      if (s.next_steps) lines.push(`- **Next steps:** ${s.next_steps}`);
+      lines.push("");
+    }
+  }
+  if (observations.length > 0) {
+    lines.push("## Recent Activity");
+    lines.push("| Time | Type | Title | Files |");
+    lines.push("|------|------|-------|-------|");
+    for (const obs of observations) {
+      const time = new Date(obs.created_at).toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      });
+      const files = [
+        ...parseJsonArray2(obs.files_read),
+        ...parseJsonArray2(obs.files_modified)
+      ].map((f) => basename(f)).join(", ");
+      lines.push(`| ${time} | ${obs.type} | ${obs.title || "-"} | ${files || "-"} |`);
+    }
+    lines.push("");
+    const detailed = observations.slice(0, fullDetailCount);
+    if (detailed.length > 0) {
+      lines.push(`## Details (last ${detailed.length})`);
+      for (const obs of detailed) {
+        lines.push(`### #${obs.id} - ${obs.title || "Untitled"}`);
+        const facts = parseJsonArray2(obs.facts);
+        if (facts.length > 0) {
+          lines.push(`**Facts:** ${facts.join("; ")}`);
+        }
+        if (obs.narrative) {
+          lines.push(`**Narrative:** ${obs.narrative}`);
+        }
+        const filesRead = parseJsonArray2(obs.files_read);
+        const filesMod = parseJsonArray2(obs.files_modified);
+        if (filesRead.length > 0 || filesMod.length > 0) {
+          const parts = [];
+          if (filesRead.length > 0) parts.push(`read: ${filesRead.join(", ")}`);
+          if (filesMod.length > 0) parts.push(`modified: ${filesMod.join(", ")}`);
+          lines.push(`**Files:** ${parts.join(" | ")}`);
+        }
+        lines.push("");
+      }
+    }
+  }
+  lines.push("</memory-lite-context>");
+  return lines.join("\n");
+}
+function parseJsonArray2(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function basename(path) {
+  return path.split("/").pop() || path;
+}
+
+// src/worker/routes/dashboard.ts
+var dashboardRoutes = new Hono2();
+dashboardRoutes.get("/dashboard/sessions", (c) => {
   try {
     const project = c.req.query("project");
     const limit = clamp(safeParseInt(c.req.query("limit"), 50), 1, MAX_LIMIT);
@@ -4613,7 +4707,7 @@ app.get("/api/dashboard/sessions", (c) => {
     return c.json({ error: "Failed to list sessions" }, 500);
   }
 });
-app.get("/api/dashboard/sessions/:sessionId/observations", (c) => {
+dashboardRoutes.get("/dashboard/sessions/:sessionId/observations", (c) => {
   try {
     const sessionId = safeParseInt(c.req.param("sessionId"), NaN);
     const db2 = getDb();
@@ -4626,7 +4720,7 @@ app.get("/api/dashboard/sessions/:sessionId/observations", (c) => {
     return c.json({ error: "Failed to list observations" }, 500);
   }
 });
-app.get("/api/dashboard/projects", (c) => {
+dashboardRoutes.get("/dashboard/projects", (c) => {
   try {
     const db2 = getDb();
     const projects = db2.prepare(`
@@ -4642,7 +4736,7 @@ app.get("/api/dashboard/projects", (c) => {
     return c.json({ error: "Failed to list projects" }, 500);
   }
 });
-app.get("/api/dashboard/stats", (c) => {
+dashboardRoutes.get("/dashboard/stats", (c) => {
   try {
     const db2 = getDb();
     const sessions = db2.prepare("SELECT COUNT(*) as count FROM sessions").get();
@@ -4679,7 +4773,7 @@ app.get("/api/dashboard/stats", (c) => {
     return c.json({ error: "Failed to get stats" }, 500);
   }
 });
-app.get("/api/dashboard/feed", (c) => {
+dashboardRoutes.get("/dashboard/feed", (c) => {
   try {
     const project = c.req.query("project");
     const limit = clamp(safeParseInt(c.req.query("limit"), 30), 1, MAX_LIMIT);
@@ -4727,122 +4821,7 @@ app.get("/api/dashboard/feed", (c) => {
     return c.json({ error: "Failed to get feed" }, 500);
   }
 });
-app.get("/api/search/index", (c) => {
-  try {
-    const q = c.req.query("q");
-    if (!q) return c.json({ error: "q parameter required" }, 400);
-    const results = searchObservationsIndex({
-      query: q,
-      project: c.req.query("project"),
-      type: c.req.query("type"),
-      dateStart: c.req.query("dateStart"),
-      dateEnd: c.req.query("dateEnd"),
-      limit: clamp(safeParseInt(c.req.query("limit"), 20), 1, MAX_LIMIT),
-      offset: Math.max(0, safeParseInt(c.req.query("offset"), 0))
-    });
-    const formatted = formatSearchIndex(results);
-    return c.json({ content: [{ type: "text", text: formatted }] });
-  } catch (error) {
-    logger.error("routes", "/api/search/index error", error);
-    return c.json({ error: "Search failed" }, 500);
-  }
-});
-app.get("/api/timeline", (c) => {
-  try {
-    const anchorId = safeParseInt(c.req.query("anchor"), NaN);
-    if (isNaN(anchorId)) return c.json({ error: "anchor parameter required (observation ID)" }, 400);
-    const depthBefore = clamp(safeParseInt(c.req.query("depth_before"), 5), 1, MAX_DEPTH);
-    const depthAfter = clamp(safeParseInt(c.req.query("depth_after"), 5), 1, MAX_DEPTH);
-    const project = c.req.query("project");
-    const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
-    if (!anchor) return c.json({ error: "Observation not found" }, 404);
-    const formatted = formatTimeline(before, anchor, after);
-    return c.json({ content: [{ type: "text", text: formatted }] });
-  } catch (error) {
-    logger.error("routes", "/api/timeline error", error);
-    return c.json({ error: "Timeline failed" }, 500);
-  }
-});
-app.post("/api/observations/batch", async (c) => {
-  try {
-    const { ids } = await c.req.json();
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return c.json({ error: "ids array required" }, 400);
-    }
-    if (ids.length > MAX_BATCH) {
-      return c.json({ error: `Too many IDs (max ${MAX_BATCH})` }, 400);
-    }
-    const observations = getObservationsByIds(ids.map(Number));
-    const formatted = formatObservationsFull(observations);
-    return c.json({ content: [{ type: "text", text: formatted }] });
-  } catch (error) {
-    logger.error("routes", "/api/observations/batch error", error);
-    return c.json({ error: "Batch fetch failed" }, 500);
-  }
-});
-app.get("/api/search", async (c) => {
-  try {
-    const q = c.req.query("q");
-    const project = c.req.query("project");
-    const mode = c.req.query("mode") || "fts";
-    const limit = clamp(safeParseInt(c.req.query("limit"), 10), 1, MAX_LIMIT);
-    if (!q) return c.json({ error: "q parameter required" }, 400);
-    if (mode === "semantic") {
-      const vecResults = await searchSemantic(getDb(), q, limit);
-      if (vecResults.length === 0) {
-        return c.json({ results: [], mode: "semantic", message: "No results (Ollama may be unavailable)" });
-      }
-      const db2 = getDb();
-      const enriched = vecResults.map((r) => {
-        const obs = db2.prepare("SELECT * FROM observations WHERE id = ?").get(r.observationId);
-        return obs ? { ...obs, distance: r.distance } : null;
-      }).filter(Boolean);
-      return c.json({ results: enriched, mode: "semantic" });
-    }
-    const results = searchObservationsFts(q, project, limit);
-    return c.json({ results, mode: "fts" });
-  } catch (error) {
-    logger.error("routes", "/api/search error", error);
-    return c.json({ error: "Search failed" }, 500);
-  }
-});
-app.delete("/api/observations/:id", (c) => {
-  try {
-    const id = safeParseInt(c.req.param("id"), NaN);
-    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
-    const deleted = deleteObservation(id);
-    if (!deleted) return c.json({ error: "Observation not found" }, 404);
-    return c.json({ ok: true });
-  } catch (error) {
-    logger.error("routes", "DELETE /api/observations error", error);
-    return c.json({ error: "Failed to delete observation" }, 500);
-  }
-});
-app.delete("/api/summaries/:id", (c) => {
-  try {
-    const id = safeParseInt(c.req.param("id"), NaN);
-    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
-    const deleted = deleteSummary(id);
-    if (!deleted) return c.json({ error: "Summary not found" }, 404);
-    return c.json({ ok: true });
-  } catch (error) {
-    logger.error("routes", "DELETE /api/summaries error", error);
-    return c.json({ error: "Failed to delete summary" }, 500);
-  }
-});
-app.delete("/api/sessions/:id", (c) => {
-  try {
-    const id = safeParseInt(c.req.param("id"), NaN);
-    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
-    const deleted = deleteSession(id);
-    if (!deleted) return c.json({ error: "Session not found" }, 404);
-    return c.json({ ok: true });
-  } catch (error) {
-    logger.error("routes", "DELETE /api/sessions error", error);
-    return c.json({ error: "Failed to delete session" }, 500);
-  }
-});
-app.get("/api/dashboard/context-preview", (c) => {
+dashboardRoutes.get("/dashboard/context-preview", (c) => {
   try {
     const project = c.req.query("project") || "unknown";
     const breakdown = generateContextDetailed(project);
@@ -4852,37 +4831,10 @@ app.get("/api/dashboard/context-preview", (c) => {
     return c.json({ error: "Failed to generate context preview" }, 500);
   }
 });
-app.get("/api/settings", (c) => {
-  try {
-    return c.json(getAllSettings());
-  } catch (error) {
-    logger.error("routes", "GET /api/settings error", error);
-    return c.json({ error: "Failed to get settings" }, 500);
-  }
-});
-app.put("/api/settings", async (c) => {
-  try {
-    const body = await c.req.json();
-    const updated = updateSettings(body);
-    return c.json(updated);
-  } catch (error) {
-    logger.error("routes", "PUT /api/settings error", error);
-    return c.json({ error: "Failed to update settings" }, 500);
-  }
-});
-app.get("/api/debug/sessions", (c) => {
-  const sessions = getActiveSessionIds().map((id) => ({
-    contentSessionId: id,
-    idleMs: Math.round(getSessionAge(id))
-  }));
-  return c.json({
-    activeSessions: sessions,
-    uptime: Math.floor(process.uptime()),
-    pid: process.pid,
-    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
-  });
-});
-app.post("/api/cleanup/review", async (c) => {
+
+// src/worker/routes/cleanup.ts
+var cleanupRoutes = new Hono2();
+cleanupRoutes.post("/cleanup/review", async (c) => {
   try {
     const { project } = await c.req.json();
     const proj = project || "unknown";
@@ -4935,7 +4887,7 @@ data: ${JSON.stringify(data)}
     return c.json({ error: "Cleanup review failed" }, 500);
   }
 });
-app.post("/api/cleanup/apply", async (c) => {
+cleanupRoutes.post("/cleanup/apply", async (c) => {
   try {
     const { deletions } = await c.req.json();
     if (!Array.isArray(deletions)) return c.json({ error: "deletions array required" }, 400);
@@ -4954,20 +4906,105 @@ app.post("/api/cleanup/apply", async (c) => {
   }
 });
 
-// src/worker/server.ts
-var __dirname = dirname(fileURLToPath(import.meta.url));
-var uiPath = join4(__dirname, "..", "ui");
-if (existsSync5(uiPath)) {
-  app.get("/", (c) => {
-    const html = readFileSync2(join4(uiPath, "index.html"), "utf-8");
-    return c.html(html);
+// src/worker/routes/settings.ts
+var settingsRoutes = new Hono2();
+settingsRoutes.get("/health", (c) => c.json({ ok: true }));
+settingsRoutes.get("/readiness", (c) => {
+  if (!isDbReady()) {
+    return c.json({ ok: false, reason: "DB not initialized" }, 503);
+  }
+  return c.json({ ok: true });
+});
+settingsRoutes.get("/context", (c) => {
+  try {
+    const project = c.req.query("project") || "unknown";
+    const context = generateContext(project);
+    return c.json({ context });
+  } catch (error) {
+    logger.error("routes", "/api/context error", error);
+    return c.json({ error: "Failed to generate context" }, 500);
+  }
+});
+settingsRoutes.get("/settings", (c) => {
+  try {
+    return c.json(getAllSettings());
+  } catch (error) {
+    logger.error("routes", "GET /api/settings error", error);
+    return c.json({ error: "Failed to get settings" }, 500);
+  }
+});
+settingsRoutes.put("/settings", async (c) => {
+  try {
+    const body = await c.req.json();
+    const updated = updateSettings(body);
+    return c.json(updated);
+  } catch (error) {
+    logger.error("routes", "PUT /api/settings error", error);
+    return c.json({ error: "Failed to update settings" }, 500);
+  }
+});
+settingsRoutes.get("/debug/sessions", (c) => {
+  const sessions = getActiveSessionIds().map((id) => ({
+    contentSessionId: id,
+    idleMs: Math.round(getSessionAge(id))
+  }));
+  return c.json({
+    activeSessions: sessions,
+    uptime: Math.floor(process.uptime()),
+    pid: process.pid,
+    memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
   });
-  app.use("/*", serveStatic({ root: uiPath }));
-}
-var port = getSetting("WORKER_PORT");
+});
+settingsRoutes.delete("/observations/:id", (c) => {
+  try {
+    const id = safeParseInt(c.req.param("id"), NaN);
+    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
+    const deleted = deleteObservation(id);
+    if (!deleted) return c.json({ error: "Observation not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    logger.error("routes", "DELETE /api/observations error", error);
+    return c.json({ error: "Failed to delete observation" }, 500);
+  }
+});
+settingsRoutes.delete("/summaries/:id", (c) => {
+  try {
+    const id = safeParseInt(c.req.param("id"), NaN);
+    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
+    const deleted = deleteSummary(id);
+    if (!deleted) return c.json({ error: "Summary not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    logger.error("routes", "DELETE /api/summaries error", error);
+    return c.json({ error: "Failed to delete summary" }, 500);
+  }
+});
+settingsRoutes.delete("/sessions/:id", (c) => {
+  try {
+    const id = safeParseInt(c.req.param("id"), NaN);
+    if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
+    const deleted = deleteSession(id);
+    if (!deleted) return c.json({ error: "Session not found" }, 404);
+    return c.json({ ok: true });
+  } catch (error) {
+    logger.error("routes", "DELETE /api/sessions error", error);
+    return c.json({ error: "Failed to delete session" }, 500);
+  }
+});
+
+// src/worker/routes.ts
+var app = new Hono2();
+app.route("/api", sessionRoutes);
+app.route("/api", searchRoutes);
+app.route("/api", dashboardRoutes);
+app.route("/api", cleanupRoutes);
+app.route("/api", settingsRoutes);
+
+// src/worker/lifecycle.ts
+import { existsSync as existsSync5, readFileSync as readFileSync2, writeFileSync as writeFileSync2, unlinkSync } from "fs";
 var pidPath = getPidPath();
-function writePid() {
-  const info = { pid: process.pid, port, startedAt: Date.now() };
+function writePid(port2) {
+  const info = { pid: process.pid, port: port2, startedAt: Date.now() };
   writeFileSync2(pidPath, JSON.stringify(info));
 }
 function removePid() {
@@ -4977,60 +5014,12 @@ function removePid() {
     logger.warn("worker", "Failed to remove PID file", err);
   }
 }
-var shutdownInitiated = false;
-var STALE_SESSION_MS = 30 * 60 * 1e3;
-var reaperInterval = setInterval(() => {
-  try {
-    for (const id of getActiveSessionIds()) {
-      const age = getSessionAge(id);
-      if (age > STALE_SESSION_MS) {
-        logger.info("reaper", `Destroying stale session ${id} (idle: ${Math.round(age / 1e3)}s)`);
-        destroyObserver(id);
-      }
-    }
-  } catch (err) {
-    logger.error("reaper", "Error during cleanup", err);
-  }
-}, 6e4);
-reaperInterval.unref();
-var IDLE_SHUTDOWN_MS = 30 * 60 * 1e3;
-var lastApiActivity = Date.now();
-app.use("/api/*", async (c, next) => {
-  lastApiActivity = Date.now();
-  await next();
-});
-var idleShutdownInterval = setInterval(() => {
-  if (getActiveSessionIds().length === 0 && Date.now() - lastApiActivity > IDLE_SHUTDOWN_MS) {
-    logger.info("worker", "No active sessions and idle for 30min, shutting down");
-    shutdown();
-  }
-}, 6e4);
-idleShutdownInterval.unref();
-function shutdown() {
-  if (shutdownInitiated) return;
-  shutdownInitiated = true;
-  clearInterval(reaperInterval);
-  clearInterval(idleShutdownInterval);
-  const forceTimer = setTimeout(() => {
-    logger.error("worker", "Graceful shutdown timed out after 10s, force exiting");
-    process.exit(1);
-  }, 1e4);
-  forceTimer.unref();
-  logger.info("worker", "Shutting down...");
-  destroyAllObservers();
-  removePid();
-  closeDb();
-  process.exit(0);
-}
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
-process.on("SIGHUP", shutdown);
-async function checkExistingWorker() {
+async function checkExistingWorker(port2) {
   if (!existsSync5(pidPath)) return false;
   try {
     const raw2 = readFileSync2(pidPath, "utf-8").trim();
     let oldPid;
-    let oldPort = port;
+    let oldPort = port2;
     try {
       const info = JSON.parse(raw2);
       oldPid = info.pid;
@@ -5049,32 +5038,109 @@ async function checkExistingWorker() {
   removePid();
   return false;
 }
-var alreadyRunning = await checkExistingWorker();
-if (alreadyRunning) process.exit(0);
-writePid();
-getDb();
-var resetCount = forceUnstickAllGlobal();
-if (resetCount > 0) {
-  logger.info("recovery", `Reset ${resetCount} stale processing messages to pending`);
-}
-setTimeout(() => {
-  try {
-    const sessionIds = getSessionsWithPendingMessages();
-    if (sessionIds.length === 0) return;
-    logger.info("recovery", `Found ${sessionIds.length} session(s) with orphaned pending messages`);
-    for (const contentSessionId of sessionIds) {
-      const session = getSessionByContentId(contentSessionId);
-      if (!session) {
-        logger.warn("recovery", `Session ${contentSessionId} not found in DB, skipping`);
-        continue;
+var STALE_SESSION_MS = 30 * 60 * 1e3;
+var reaperInterval;
+function startReaper() {
+  reaperInterval = setInterval(() => {
+    try {
+      for (const id of getActiveSessionIds()) {
+        const age = getSessionAge(id);
+        if (age > STALE_SESSION_MS) {
+          logger.info("reaper", `Destroying stale session ${id} (idle: ${Math.round(age / 1e3)}s)`);
+          destroyObserver(id);
+        }
       }
-      logger.info("recovery", `Creating observer to drain ${contentSessionId} (project: ${session.project})`);
-      getOrCreateObserver(contentSessionId, session.project);
+    } catch (err) {
+      logger.error("reaper", "Error during cleanup", err);
     }
-  } catch (err) {
-    logger.error("recovery", "Failed to recover pending messages", err);
+  }, 6e4);
+  reaperInterval.unref();
+}
+var IDLE_SHUTDOWN_MS = 30 * 60 * 1e3;
+var lastApiActivity = Date.now();
+var idleShutdownInterval;
+function installIdleMiddleware(app2) {
+  app2.use("/api/*", async (c, next) => {
+    lastApiActivity = Date.now();
+    await next();
+  });
+}
+function startIdleShutdown() {
+  idleShutdownInterval = setInterval(() => {
+    if (getActiveSessionIds().length === 0 && Date.now() - lastApiActivity > IDLE_SHUTDOWN_MS) {
+      logger.info("worker", "No active sessions and idle for 30min, shutting down");
+      shutdown();
+    }
+  }, 6e4);
+  idleShutdownInterval.unref();
+}
+var shutdownInitiated = false;
+function shutdown() {
+  if (shutdownInitiated) return;
+  shutdownInitiated = true;
+  clearInterval(reaperInterval);
+  clearInterval(idleShutdownInterval);
+  const forceTimer = setTimeout(() => {
+    logger.error("worker", "Graceful shutdown timed out after 10s, force exiting");
+    process.exit(1);
+  }, 1e4);
+  forceTimer.unref();
+  logger.info("worker", "Shutting down...");
+  destroyAllObservers();
+  removePid();
+  closeDb();
+  process.exit(0);
+}
+function installSignalHandlers() {
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+  process.on("SIGHUP", shutdown);
+}
+function recoverPendingMessages() {
+  const resetCount = forceUnstickAllGlobal();
+  if (resetCount > 0) {
+    logger.info("recovery", `Reset ${resetCount} stale processing messages to pending`);
   }
-}, 2e3);
+  setTimeout(() => {
+    try {
+      const sessionIds = getSessionsWithPendingMessages();
+      if (sessionIds.length === 0) return;
+      logger.info("recovery", `Found ${sessionIds.length} session(s) with orphaned pending messages`);
+      for (const contentSessionId of sessionIds) {
+        const session = getSessionByContentId(contentSessionId);
+        if (!session) {
+          logger.warn("recovery", `Session ${contentSessionId} not found in DB, skipping`);
+          continue;
+        }
+        logger.info("recovery", `Creating observer to drain ${contentSessionId} (project: ${session.project})`);
+        getOrCreateObserver(contentSessionId, session.project);
+      }
+    } catch (err) {
+      logger.error("recovery", "Failed to recover pending messages", err);
+    }
+  }, 2e3);
+}
+
+// src/worker/server.ts
+var __dirname = dirname(fileURLToPath(import.meta.url));
+var uiPath = join4(__dirname, "..", "ui");
+if (existsSync6(uiPath)) {
+  app.get("/", (c) => {
+    const html = readFileSync3(join4(uiPath, "index.html"), "utf-8");
+    return c.html(html);
+  });
+  app.use("/*", serveStatic({ root: uiPath }));
+}
+var port = getSetting("WORKER_PORT");
+var alreadyRunning = await checkExistingWorker(port);
+if (alreadyRunning) process.exit(0);
+writePid(port);
+getDb();
+installSignalHandlers();
+installIdleMiddleware(app);
+startReaper();
+startIdleShutdown();
+recoverPendingMessages();
 serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
   logger.info("worker", `Memory-lite worker running on http://127.0.0.1:${port}`);
 });

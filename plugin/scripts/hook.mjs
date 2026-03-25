@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// src/hooks/hook.ts
+import { readFileSync as readFileSync3 } from "fs";
+
 // src/hooks/stdin.ts
 var SAFETY_TIMEOUT_MS = 3e4;
 var PARSE_DELAY_MS = 50;
@@ -128,6 +131,13 @@ function getProjectName(cwd) {
   return cwd.split("/").pop() || "unknown";
 }
 
+// src/hooks/worker-spawn.ts
+import { spawn, execSync } from "child_process";
+import { existsSync as existsSync3, readFileSync as readFileSync2, statSync } from "fs";
+import { join as join2, dirname } from "path";
+import { fileURLToPath } from "url";
+import { homedir as homedir2 } from "os";
+
 // src/utils/settings.ts
 import { existsSync as existsSync2, readFileSync, writeFileSync } from "fs";
 var DEFAULTS = {
@@ -166,13 +176,7 @@ function getSetting(key) {
   return getSettings()[key];
 }
 
-// src/hooks/hook.ts
-import { readFileSync as readFileSync2, statSync } from "fs";
-import { spawn, execSync } from "child_process";
-import { join as join2, dirname } from "path";
-import { existsSync as existsSync3 } from "fs";
-import { fileURLToPath } from "url";
-import { homedir as homedir2 } from "os";
+// src/hooks/worker-spawn.ts
 var WORKER_BASE = `http://127.0.0.1:${getSetting("WORKER_PORT")}`;
 async function workerFetch(path, options, retries = 2) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -234,7 +238,7 @@ function ensureDeps(pluginRoot) {
     return false;
   }
 }
-async function handleStart() {
+async function spawnWorker() {
   if (await waitForHealth(1e3)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
@@ -296,6 +300,8 @@ async function handleStart() {
   }
   console.log(JSON.stringify(formatSilentOutput()));
 }
+
+// src/hooks/hook.ts
 async function handleContext(input) {
   const project = getProjectName(input.cwd);
   const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
@@ -372,7 +378,7 @@ async function handleSummarize(input) {
   let lastAssistantMessage = "";
   if (input.transcriptPath) {
     try {
-      const content = readFileSync2(input.transcriptPath, "utf-8");
+      const content = readFileSync3(input.transcriptPath, "utf-8");
       const lines = content.trim().split("\n");
       for (let i = lines.length - 1; i >= 0; i--) {
         try {
@@ -418,7 +424,7 @@ async function main() {
   const input = normalizeInput(raw);
   switch (event) {
     case "start":
-      await handleStart();
+      await spawnWorker();
       break;
     case "context":
       await handleContext(input);
