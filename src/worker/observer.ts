@@ -11,6 +11,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
+import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt } from './prompts.js';
 import { enqueuePending, claimNextPending, deletePending, getPendingCount, forceUnstickAll, type PendingMessage } from '../db/pending-store.js';
 import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
 import { embedObservation } from '../embeddings/embeddings.js';
@@ -45,121 +46,6 @@ function findClaudeExecutable(): string {
     logger.warn('observer', 'Could not find claude executable via "which claude"');
   }
   return 'claude';
-}
-
-// --- Prompts (adapted from claude-mem) ---
-
-const SYSTEM_PROMPT = `You are a specialized observer creating searchable memory FOR FUTURE SESSIONS.
-
-CRITICAL: Record what was LEARNED/BUILT/FIXED/DEPLOYED/CONFIGURED, not what you (the observer) are doing.
-
-You do not have access to tools. All information you need is provided in <observed_from_primary_session> messages. Create observations from what you observe — no investigation needed.
-
-Your job is to monitor a different Claude Code session happening RIGHT NOW, with the goal of creating observations and progress summaries as the work is being done LIVE by the user. You are NOT the one doing the work — you are ONLY observing and recording.
-
-WHAT TO RECORD
---------------
-Focus on deliverables and capabilities:
-- What the system NOW DOES differently (new capabilities)
-- What shipped to users/production (features, fixes, configs, docs)
-- Bugs found with root cause analysis
-- Non-obvious gotchas and workarounds
-- Architecture decisions with rationale
-- API behaviors or quirks discovered
-
-Use verbs like: implemented, fixed, deployed, configured, migrated, optimized, added, refactored
-
-GOOD: "Authentication now supports OAuth2 with PKCE flow"
-GOOD: "Worker crashes because sqlite-vec isn't loaded before query — fixed by moving loadExtension to init"
-BAD: "Analyzed authentication implementation and stored findings"
-BAD: "File X was read" / "Function Y was added"
-
-WHEN TO SKIP
-------------
-Skip routine operations — output nothing if:
-- Empty status checks or simple file listings
-- Package installations with no errors
-- Repetitive operations you've already documented
-- File reads that reveal nothing surprising
-- Routine edits (import changes, formatting, config tweaks)
-- CSS/style-only changes
-- Removing debug/logging statements
-
-**No output necessary if skipping.**
-
-OBSERVATION TYPES (use exactly one):
-- bugfix: something was broken, now fixed
-- feature: new capability added
-- refactor: code restructured, behavior unchanged
-- discovery: learning about existing system (only if non-obvious insight)
-- decision: architectural/design choice with rationale
-- change: generic modification (docs, config, misc)
-
-OUTPUT FORMAT
--------------
-\`\`\`xml
-<observation>
-  <type>bugfix | feature | refactor | discovery | decision | change</type>
-  <title>Short title capturing the core action (5-10 words)</title>
-  <facts>
-    <fact>Concise self-contained statement with specifics (filenames, values)</fact>
-    <fact>Another specific fact</fact>
-  </facts>
-  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
-  <files_read>
-    <file>path/to/file</file>
-  </files_read>
-  <files_modified>
-    <file>path/to/file</file>
-  </files_modified>
-</observation>
-\`\`\`
-
-IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
-
-function buildInitPrompt(project: string, userPrompt?: string): string {
-  return `${SYSTEM_PROMPT}
-
-MEMORY PROCESSING START
-=======================
-Session started for project: ${project}
-${userPrompt ? `User request: ${userPrompt}` : ''}`;
-}
-
-function buildObservationPrompt(toolName: string, toolInput: string, toolResponse: string, cwd?: string): string {
-  return `<observed_from_primary_session>
-  <what_happened>${toolName}</what_happened>
-  <occurred_at>${new Date().toISOString()}</occurred_at>${cwd ? `\n  <working_directory>${cwd}</working_directory>` : ''}
-  <parameters>${truncate(toolInput, 2000)}</parameters>
-  <outcome>${truncate(toolResponse, 3000)}</outcome>
-</observed_from_primary_session>`;
-}
-
-function buildSummaryPrompt(lastAssistantMessage: string): string {
-  return `--- MODE SWITCH: PROGRESS SUMMARY ---
-Do NOT output <observation> tags. This is a summary request, not an observation request.
-Your response MUST use <summary> tags ONLY.
-
-Write progress notes of what was done, what was learned, and what's next.
-
-Claude's Full Response to User:
-${truncate(lastAssistantMessage, 5000)}
-
-Respond in this XML format:
-<summary>
-  <request>What the user originally asked for</request>
-  <investigated>What was explored or researched</investigated>
-  <learned>Key findings or discoveries</learned>
-  <completed>What was actually done/implemented</completed>
-  <next_steps>What remains to be done</next_steps>
-</summary>
-
-Output ONLY the summary XML, nothing else.`;
-}
-
-function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen) + '... [truncated]';
 }
 
 // --- DurableQueue: SQLite-backed async iterator ---
