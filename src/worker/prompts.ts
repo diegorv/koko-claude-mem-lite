@@ -96,7 +96,9 @@ TITLE EXAMPLES:
 - BAD: "Updated authentication module" (the code shows this)
 - BAD: "Explored codebase structure" (no insight)
 
-IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
+IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.
+
+LANGUAGE: Always write observations in English, regardless of the language used in the session.`;
 
 // --- Single-turn summarizer prompts ---
 
@@ -166,7 +168,8 @@ CRITICAL RULES:
 - Title must contain the insight itself, not just name the topic.
 - Each fact must stand alone — no pronouns, no "it" or "this", include specific names/values.
 - Skip files_read — only include files_modified (files read are in git blame).
-- Output ONLY the XML block, nothing else.`;
+- Output ONLY the XML block, nothing else.
+- Always write in English, regardless of the language used in the session.`;
 
 export const SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary for FUTURE sessions.
 
@@ -186,7 +189,8 @@ Rules:
 - "learned" must contain INSIGHTS, not descriptions ("SDK ignores systemPrompt in query mode" not "used the Agent SDK")
 - "next_steps" should be empty rather than listing obvious follow-ups like "run tests" or "restart"
 - Omit "investigated" — it adds noise without signal
-- Output ONLY the XML block, nothing else`;
+- Output ONLY the XML block, nothing else
+- Always write in English, regardless of the language used in the session.`;
 
 export const CLEANUP_SYSTEM_PROMPT = `You are an extremely aggressive memory quality filter. Your job is to DELETE everything that won't help a developer in a FUTURE session. Only KEEP observations that contain genuinely actionable technical knowledge.
 
@@ -211,6 +215,8 @@ KEEP (only if they contain specific technical knowledge you can't easily re-deri
 - Performance findings with specifics
 
 When in doubt, DELETE. A smaller, high-signal context is far more valuable than a large noisy one.
+
+LANGUAGE: Always write reasons in English, regardless of the language used in the session.
 
 Output format (one line per item, in order — ALWAYS include the type# prefix matching the input):
 <decisions>
