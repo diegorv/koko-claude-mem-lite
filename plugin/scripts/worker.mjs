@@ -2853,6 +2853,7 @@ var Hono2 = class extends Hono {
 
 // src/db/database.ts
 import Database from "better-sqlite3";
+import { renameSync } from "fs";
 import { getLoadablePath } from "sqlite-vec";
 
 // src/utils/paths.ts
@@ -3070,11 +3071,41 @@ function tryLoadSqliteVec(database) {
     logger.info("db", "sqlite-vec not available \u2014 semantic search disabled, FTS5 still works");
   }
 }
+function openDb(dbPath) {
+  const database = new Database(dbPath);
+  initializeSchema(database);
+  const result = database.prepare("PRAGMA integrity_check").get();
+  if (result?.integrity_check !== "ok") {
+    database.close();
+    throw new Error(`SQLite integrity check failed: ${result?.integrity_check}`);
+  }
+  return database;
+}
+function backupCorruptedDb(dbPath) {
+  const backupPath = `${dbPath}.corrupted-${Date.now()}`;
+  try {
+    renameSync(dbPath, backupPath);
+    logger.warn("db", `Corrupted DB moved to ${backupPath}. Starting fresh.`);
+  } catch (renameErr) {
+    logger.error("db", "Failed to rename corrupted DB", renameErr);
+  }
+}
 function getDb() {
   if (db) return db;
   getDataDir();
-  db = new Database(getDbPath());
-  initializeSchema(db);
+  const dbPath = getDbPath();
+  try {
+    db = openDb(dbPath);
+  } catch (err) {
+    logger.error("db", "DB open/init failed \u2014 attempting recovery", err);
+    try {
+      new Database(dbPath).close();
+    } catch {
+    }
+    backupCorruptedDb(dbPath);
+    db = openDb(dbPath);
+    logger.info("db", "Fresh DB created after recovery");
+  }
   tryLoadSqliteVec(db);
   dbReady = true;
   return db;
@@ -3436,14 +3467,18 @@ OUTPUT FORMAT
     <concept>gotcha</concept>
     <concept>problem-solution</concept>
   </concepts>
-  <files_read>
-    <file>path/to/file</file>
-  </files_read>
   <files_modified>
     <file>path/to/file</file>
   </files_modified>
 </observation>
 \`\`\`
+
+TITLE EXAMPLES:
+- GOOD: "matcher must be * because resume sessions are missed"
+- GOOD: "Agent SDK ignores systemPrompt option in query mode"
+- BAD: "Fixed hook matcher" (what was the insight?)
+- BAD: "Updated authentication module" (the code shows this)
+- BAD: "Explored codebase structure" (no insight)
 
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
 var OBSERVATION_EXTRACTION_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
@@ -3595,10 +3630,9 @@ ${truncate(lastAssistantMessage, 5e3)}
 Respond in this XML format:
 <summary>
   <request>What the user originally asked for</request>
-  <investigated>What was explored or researched</investigated>
-  <learned>Key findings or discoveries</learned>
-  <completed>What was actually done/implemented</completed>
-  <next_steps>What remains to be done</next_steps>
+  <learned>Key findings or discoveries (non-obvious gotchas, root causes, insights)</learned>
+  <completed>What was accomplished \u2014 the outcome, not the process</completed>
+  <next_steps>What remains to be done (omit if nothing non-obvious remains)</next_steps>
 </summary>
 
 Output ONLY the summary XML, nothing else.`;
@@ -4101,6 +4135,13 @@ function getSessionAge(contentSessionId) {
   const session = activeSessions.get(contentSessionId);
   if (!session) return Infinity;
   return Date.now() - session.lastActivityTime;
+}
+function getObserverDetails() {
+  return Array.from(activeSessions.entries()).map(([id, s]) => ({
+    contentSessionId: id,
+    project: s.project,
+    lastActivityAge: Date.now() - s.lastActivityTime
+  }));
 }
 
 // src/worker/observer.ts
@@ -4741,6 +4782,7 @@ function generateContext(project) {
       if (entry.kind === "summary") {
         const s = entry.data;
         lines.push(`S${s.id} ${s.request || "Session"}`);
+        if (s.completed) lines.push(`  Done: ${s.completed}`);
         if (s.learned) lines.push(`  Learned: ${s.learned}`);
         if (s.next_steps) lines.push(`  Next: ${s.next_steps}`);
       } else {
@@ -4748,12 +4790,21 @@ function generateContext(project) {
         const time = formatTime2(obs.created_at);
         const isFull = fullIds.has(obs.id);
         if (isFull) {
-          lines.push(`**${obs.id}** ${time} ${typeIcon2(obs.type)} **${obs.title || "Untitled"}**`);
-          if (obs.narrative) {
-            lines.push(`  ${obs.narrative}`);
-          }
+          const concepts = parseJsonArray2(obs.concepts);
+          const conceptBadges = concepts.length > 0 ? "  " + concepts.map((c) => `[${c}]`).join("") : "";
+          lines.push(`**${obs.id}** ${time} ${typeIcon2(obs.type)} **${obs.title || "Untitled"}**${conceptBadges}`);
+          if (obs.subtitle) lines.push(`  ${obs.subtitle}`);
+          if (obs.narrative) lines.push(`  ${obs.narrative}`);
+          const facts = parseJsonArray2(obs.facts);
+          for (const fact of facts) lines.push(`  - ${fact}`);
+          const files = parseJsonArray2(obs.files_modified);
+          if (files.length > 0) lines.push(`  Files: ${files.join(", ")}`);
         } else {
-          lines.push(`${obs.id} ${time} ${typeIcon2(obs.type)} ${obs.title || "-"}`);
+          const subtitle = obs.subtitle ? ` \u2014 ${obs.subtitle}` : "";
+          const concepts = parseJsonArray2(obs.concepts);
+          const highSignal = concepts.filter((c) => c === "gotcha" || c === "trade-off");
+          const badges = highSignal.length > 0 ? " " + highSignal.map((c) => `[${c}]`).join("") : "";
+          lines.push(`${obs.id} ${time} ${typeIcon2(obs.type)} ${obs.title || "-"}${subtitle}${badges}`);
         }
       }
     }
@@ -4774,6 +4825,15 @@ function formatTime2(iso) {
     minute: "2-digit",
     hour12: false
   });
+}
+function parseJsonArray2(json) {
+  if (!json) return [];
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
 
 // src/worker/routes/dashboard.ts
@@ -4921,6 +4981,29 @@ dashboardRoutes.get("/dashboard/feed", (c) => {
   } catch (error) {
     logger.error("routes", "/api/dashboard/feed error", error);
     return c.json({ error: "Failed to get feed" }, 500);
+  }
+});
+dashboardRoutes.get("/dashboard/live", (c) => {
+  try {
+    const db2 = getDb();
+    const observers = getObserverDetails().map((o) => ({
+      ...o,
+      pendingCount: db2.prepare(
+        "SELECT COUNT(*) as count FROM pending_messages WHERE content_session_id = ?"
+      ).get(o.contentSessionId)
+    })).map((o) => ({ ...o, pendingCount: o.pendingCount?.count ?? 0 }));
+    const queue = db2.prepare(`
+      SELECT pm.id, pm.content_session_id, pm.kind, pm.status, pm.created_at_epoch,
+        s.project
+      FROM pending_messages pm
+      LEFT JOIN sessions s ON s.content_session_id = pm.content_session_id
+      ORDER BY pm.id ASC
+      LIMIT 200
+    `).all();
+    return c.json({ observers, queue });
+  } catch (error) {
+    logger.error("routes", "/api/dashboard/live error", error);
+    return c.json({ error: "Failed to get live data" }, 500);
   }
 });
 dashboardRoutes.get("/dashboard/context-preview", (c) => {

@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { renameSync } from 'fs';
 import { getLoadablePath } from 'sqlite-vec';
 import { getDbPath, getDataDir } from '../utils/paths.js';
 import { logger } from '../utils/logger.js';
@@ -179,12 +180,47 @@ function tryLoadSqliteVec(database: Database.Database): void {
   }
 }
 
+export function openDb(dbPath: string): Database.Database {
+  const database = new Database(dbPath);
+  initializeSchema(database);
+
+  // Integrity check: if the DB is corrupt, bail out now so the caller can recover.
+  const result = database.prepare('PRAGMA integrity_check').get() as { integrity_check: string };
+  if (result?.integrity_check !== 'ok') {
+    database.close();
+    throw new Error(`SQLite integrity check failed: ${result?.integrity_check}`);
+  }
+
+  return database;
+}
+
+export function backupCorruptedDb(dbPath: string): void {
+  const backupPath = `${dbPath}.corrupted-${Date.now()}`;
+  try {
+    renameSync(dbPath, backupPath);
+    logger.warn('db', `Corrupted DB moved to ${backupPath}. Starting fresh.`);
+  } catch (renameErr) {
+    logger.error('db', 'Failed to rename corrupted DB', renameErr);
+  }
+}
+
 export function getDb(): Database.Database {
   if (db) return db;
 
   getDataDir(); // ensure dir exists
-  db = new Database(getDbPath());
-  initializeSchema(db);
+  const dbPath = getDbPath();
+
+  try {
+    db = openDb(dbPath);
+  } catch (err) {
+    logger.error('db', 'DB open/init failed — attempting recovery', err);
+    try { new Database(dbPath).close(); } catch {} // close if partially open
+    backupCorruptedDb(dbPath);
+    // Fresh DB
+    db = openDb(dbPath);
+    logger.info('db', 'Fresh DB created after recovery');
+  }
+
   tryLoadSqliteVec(db);
   dbReady = true;
   return db;
