@@ -110,12 +110,17 @@ memory-lite-plugin/
 │       ├── paths.ts         # Data directory and file path helpers
 │       ├── settings.ts      # Configuration with env var overrides
 │       ├── privacy.ts       # <private> and <memory-lite-context> tag stripping
-│       └── hash.ts          # SHA256 content hashing for deduplication
+│       ├── hash.ts          # SHA256 content hashing for deduplication
+│       └── logger.ts        # Structured file logger (writes to ~/.memory-lite/worker.log)
 │   └── ui/                  # Svelte 5 dashboard (Vite-built SPA)
 │       ├── App.svelte
+│       ├── main.ts
 │       ├── api.ts
 │       └── components/
+│           ├── Header.svelte
+│           ├── StatsBar.svelte
 │           ├── FeedView.svelte
+│           ├── FeedItem.svelte
 │           ├── SessionsView.svelte
 │           ├── SearchView.svelte
 │           ├── ContextView.svelte
@@ -128,7 +133,7 @@ memory-lite-plugin/
 │   ├── scripts/
 │   │   ├── setup.mjs         # Installs native deps (better-sqlite3, sqlite-vec)
 │   │   ├── hook.mjs          # Bundled hook entry point
-│   │   ├── worker.mjs        # Bundled Express worker
+│   │   ├── worker.mjs        # Bundled Hono worker
 │   │   └── mcp-server.mjs    # Bundled MCP server
 │   └── ui/                   # Built dashboard static files
 └── .claude-plugin/
@@ -140,7 +145,9 @@ memory-lite-plugin/
 | Hook | Event | Action | Timeout |
 |------|-------|--------|---------|
 | `Setup` | Plugin setup | Installs native dependencies (`better-sqlite3`, `sqlite-vec`) | 300s |
-| `SessionStart` | New session or clear/compact/resume | Installs deps, spawns worker, injects memory context | 30s |
+| `SessionStart` (setup) | Any session start | Installs deps if missing | 300s |
+| `SessionStart` (start) | Any session start | Spawns worker daemon if not already running | 60s |
+| `SessionStart` (context) | Any session start | Injects memory context into session | 30s |
 | `UserPromptSubmit` | User sends a message | Creates/resumes session, stores prompt | 30s |
 | `PostToolUse` | Any tool finishes | Multi-turn observer (or single-turn fallback) extracts structured observation | 120s |
 | `Stop` | Claude stops responding | AI generates session summary | 60s |
@@ -155,7 +162,7 @@ The worker is a background HTTP server (`127.0.0.1:37888`, built with [Hono](htt
 - Handles AI extraction calls (Claude Sonnet via Anthropic Agent SDK)
 - Serves the dashboard UI static files
 - Auto-spawns on first hook call if not running
-- Writes its PID to `~/.memory-lite/worker.pid`
+- Writes its PID (as structured JSON `{ pid, port, startedAt }`) to `~/.memory-lite/worker.pid`
 - Shuts down gracefully on SIGTERM/SIGINT/SIGHUP
 - Logs to `~/.memory-lite/worker.log` (structured file logger)
 
@@ -227,10 +234,10 @@ Instead of a separate AI call per tool use, memory-lite maintains a persistent `
 | `created_at` | TEXT | ISO 8601 timestamp |
 | `created_at_epoch` | INTEGER | Unix epoch ms |
 
-**summaries** — One per session, generated at session end
+**summaries** — One or more per session, generated at session end
 | Column | Type | Description |
 |--------|------|-------------|
-| `session_id` | INTEGER | FK to sessions (unique) |
+| `session_id` | INTEGER | FK to sessions |
 | `project` | TEXT | Project folder name |
 | `request` | TEXT | What the user originally asked |
 | `investigated` | TEXT | What was explored |
@@ -363,8 +370,9 @@ If Ollama or sqlite-vec aren't available, everything continues to work — only 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/health` | Health check → `{ ok: true }` |
-| `GET` | `/api/debug/sessions` | List active observer sessions with idle times |
+| `GET` | `/api/health` | Liveness check → `{ ok: true }` (responds as soon as server is up) |
+| `GET` | `/api/readiness` | Readiness check → `{ ok: true }` only after DB is fully initialized |
+| `GET` | `/api/debug/sessions` | List active observer sessions with idle times, uptime, PID, and memory usage |
 | `GET` | `/api/context?project=` | Get context for session injection |
 | `POST` | `/api/sessions` | Create or resume a session |
 | `POST` | `/api/observations` | Store a tool-use observation (AI-extracted) |
