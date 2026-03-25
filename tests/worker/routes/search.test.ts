@@ -23,11 +23,11 @@ function insertSession(contentSessionId: string, project: string) {
   return testDb.prepare('SELECT * FROM sessions WHERE content_session_id = ?').get(contentSessionId) as any;
 }
 
-function insertObs(sessionId: number, project: string, title: string, epoch: number) {
+function insertObs(sessionId: number, project: string, title: string, epoch: number, type = 'feature') {
   testDb.prepare(
     `INSERT INTO observations (session_id, project, type, title, facts, narrative, files_read, files_modified, content_hash, created_at, created_at_epoch)
-     VALUES (?, ?, 'feature', ?, '[]', 'narrative', '[]', '[]', ?, ?, ?)`
-  ).run(sessionId, project, title, `h-${epoch}`, new Date(epoch).toISOString(), epoch);
+     VALUES (?, ?, ?, ?, '[]', 'narrative', '[]', '[]', ?, ?, ?)`
+  ).run(sessionId, project, type, title, `h-${epoch}`, new Date(epoch).toISOString(), epoch);
 }
 
 beforeEach(() => {
@@ -61,6 +61,56 @@ describe('GET /search/index', () => {
     expect(body.content[0].text).toContain('No results found');
   });
 });
+
+  it('filters by type', async () => {
+    const session = insertSession('cs-1', 'proj');
+    insertObs(session.id, 'proj', 'Feature thing', 1700000000000, 'feature');
+    insertObs(session.id, 'proj', 'Bug fix thing', 1700000001000, 'bugfix');
+    const res = await searchRoutes.request('/search/index?q=thing&type=bugfix');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content[0].text).toContain('Bug fix thing');
+    expect(body.content[0].text).not.toContain('Feature thing');
+  });
+
+  it('filters by dateStart (excludes older observations)', async () => {
+    const session = insertSession('cs-1', 'proj');
+    const old = new Date('2024-01-01T10:00:00Z').getTime();
+    const recent = new Date('2024-06-01T10:00:00Z').getTime();
+    insertObs(session.id, 'proj', 'Old observation', old);
+    insertObs(session.id, 'proj', 'Recent observation', recent);
+    const res = await searchRoutes.request('/search/index?q=observation&dateStart=2024-03-01');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content[0].text).toContain('Recent observation');
+    expect(body.content[0].text).not.toContain('Old observation');
+  });
+
+  it('filters by dateEnd (excludes newer observations)', async () => {
+    const session = insertSession('cs-1', 'proj');
+    const old = new Date('2024-01-01T10:00:00Z').getTime();
+    const recent = new Date('2024-06-01T10:00:00Z').getTime();
+    insertObs(session.id, 'proj', 'January observation', old);
+    insertObs(session.id, 'proj', 'June observation', recent);
+    const res = await searchRoutes.request('/search/index?q=observation&dateEnd=2024-03-01');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content[0].text).toContain('January observation');
+    expect(body.content[0].text).not.toContain('June observation');
+  });
+
+  it('combines dateStart and dateEnd as a range', async () => {
+    const session = insertSession('cs-1', 'proj');
+    insertObs(session.id, 'proj', 'January entry', new Date('2024-01-15T00:00:00Z').getTime());
+    insertObs(session.id, 'proj', 'March entry', new Date('2024-03-15T00:00:00Z').getTime());
+    insertObs(session.id, 'proj', 'December entry', new Date('2024-12-15T00:00:00Z').getTime());
+    const res = await searchRoutes.request('/search/index?q=entry&dateStart=2024-02-01&dateEnd=2024-06-01');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content[0].text).toContain('March entry');
+    expect(body.content[0].text).not.toContain('January entry');
+    expect(body.content[0].text).not.toContain('December entry');
+  });
 
 describe('GET /timeline', () => {
   it('returns 400 without anchor parameter', async () => {
