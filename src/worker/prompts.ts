@@ -166,9 +166,10 @@ KEEP (only if they contain specific technical knowledge you can't easily re-deri
 
 When in doubt, DELETE. A smaller, high-signal context is far more valuable than a large noisy one.
 
-Output format (one line per item, in order):
+Output format (one line per item, in order — ALWAYS include the type# prefix matching the input):
 <decisions>
-<item id="ID">KEEP|DELETE: reason</item>
+<item id="observation#ID">KEEP|DELETE: reason</item>
+<item id="summary#ID">KEEP|DELETE: reason</item>
 </decisions>`;
 
 // --- Prompt builders ---

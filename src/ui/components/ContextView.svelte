@@ -79,8 +79,10 @@
         project || undefined,
         (items) => { pendingItems = items; },
         (result) => {
+          const key = `${result.type}-${result.id}`;
+          if (resolvedIds.has(key)) return;
           cleanupResults = [...cleanupResults, result];
-          resolvedIds = new Set([...resolvedIds, `${result.type}-${result.id}`]);
+          resolvedIds = new Set([...resolvedIds, key]);
         },
         (results, totalReviewed) => {
           if (results.length > 0) {

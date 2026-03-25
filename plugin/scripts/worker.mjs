@@ -3503,9 +3503,10 @@ KEEP (only if they contain specific technical knowledge you can't easily re-deri
 
 When in doubt, DELETE. A smaller, high-signal context is far more valuable than a large noisy one.
 
-Output format (one line per item, in order):
+Output format (one line per item, in order \u2014 ALWAYS include the type# prefix matching the input):
 <decisions>
-<item id="ID">KEEP|DELETE: reason</item>
+<item id="observation#ID">KEEP|DELETE: reason</item>
+<item id="summary#ID">KEEP|DELETE: reason</item>
 </decisions>`;
 function truncate(str, maxLen) {
   if (str.length <= maxLen) return str;
@@ -3599,21 +3600,36 @@ async function reviewForCleanup(items) {
   return parseCleanupResults(text, items);
 }
 function parseCleanupResults(text, items) {
+  logger.debug("cleanup", `Raw AI response (${text.length} chars):
+${text}`);
   const results = [];
-  const itemRegex = /<item id="(?:(?:observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  const seen = /* @__PURE__ */ new Set();
+  const itemRegex = /<item id="(?:(observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
   let match2;
   while ((match2 = itemRegex.exec(text)) !== null) {
-    const id = parseInt(match2[1]);
-    const item = items.find((i) => i.id === id);
-    if (item) {
-      results.push({
-        id,
-        type: item.type,
-        action: match2[2].toLowerCase(),
-        reason: match2[3].trim()
-      });
+    const typeHint = match2[1];
+    const id = parseInt(match2[2]);
+    const item = typeHint ? items.find((i) => i.id === id && i.type === typeHint) : items.find((i) => i.id === id);
+    if (!item) {
+      logger.warn("cleanup", `No matching item for id=${id} type=${typeHint ?? "any"}, skipping`);
+      continue;
     }
+    const key = `${item.type}-${item.id}`;
+    if (seen.has(key)) {
+      logger.warn("cleanup", `Duplicate result for ${key}, skipping`);
+      continue;
+    }
+    seen.add(key);
+    const result = {
+      id,
+      type: item.type,
+      action: match2[3].toLowerCase(),
+      reason: match2[4].trim()
+    };
+    logger.debug("cleanup", `Parsed: ${key} \u2192 ${result.action}: ${result.reason}`);
+    results.push(result);
   }
+  logger.info("cleanup", `Parsed ${results.length} results from ${items.length} items`);
   return results;
 }
 

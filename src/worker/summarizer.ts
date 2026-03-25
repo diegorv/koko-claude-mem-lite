@@ -97,21 +97,39 @@ export async function reviewForCleanup(items: CleanupItem[]): Promise<CleanupRes
   return parseCleanupResults(text, items);
 }
 
-function parseCleanupResults(text: string, items: CleanupItem[]): CleanupResult[] {
+export function parseCleanupResults(text: string, items: CleanupItem[]): CleanupResult[] {
+  logger.debug('cleanup', `Raw AI response (${text.length} chars):\n${text}`);
+
   const results: CleanupResult[] = [];
-  const itemRegex = /<item id="(?:(?:observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
+  const seen = new Set<string>();
+  const itemRegex = /<item id="(?:(observation|summary)#)?(\d+)">(KEEP|DELETE):\s*(.*?)<\/item>/g;
   let match;
   while ((match = itemRegex.exec(text)) !== null) {
-    const id = parseInt(match[1]);
-    const item = items.find(i => i.id === id);
-    if (item) {
-      results.push({
-        id,
-        type: item.type,
-        action: match[2].toLowerCase() as 'keep' | 'delete',
-        reason: match[3].trim(),
-      });
+    const typeHint = match[1] as 'observation' | 'summary' | undefined;
+    const id = parseInt(match[2]);
+    const item = typeHint
+      ? items.find(i => i.id === id && i.type === typeHint)
+      : items.find(i => i.id === id);
+    if (!item) {
+      logger.warn('cleanup', `No matching item for id=${id} type=${typeHint ?? 'any'}, skipping`);
+      continue;
     }
+    const key = `${item.type}-${item.id}`;
+    if (seen.has(key)) {
+      logger.warn('cleanup', `Duplicate result for ${key}, skipping`);
+      continue;
+    }
+    seen.add(key);
+    const result: CleanupResult = {
+      id,
+      type: item.type,
+      action: match[3].toLowerCase() as 'keep' | 'delete',
+      reason: match[4].trim(),
+    };
+    logger.debug('cleanup', `Parsed: ${key} → ${result.action}: ${result.reason}`);
+    results.push(result);
   }
+
+  logger.info('cleanup', `Parsed ${results.length} results from ${items.length} items`);
   return results;
 }
