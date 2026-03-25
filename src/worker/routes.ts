@@ -27,6 +27,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function safeParseInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const n = parseInt(value, 10);
+  return isNaN(n) ? fallback : n;
+}
+
 // Health check (liveness — responds if server is up)
 app.get('/api/health', (c) => c.json({ ok: true }));
 
@@ -180,8 +186,8 @@ app.post('/api/sessions/complete', async (c) => {
 app.get('/api/dashboard/sessions', (c) => {
   try {
     const project = c.req.query('project');
-    const limit = clamp(parseInt(c.req.query('limit') || '50'), 1, MAX_LIMIT);
-    const offset = Math.max(0, parseInt(c.req.query('offset') || '0'));
+    const limit = clamp(safeParseInt(c.req.query('limit'), 50), 1, MAX_LIMIT);
+    const offset = Math.max(0, safeParseInt(c.req.query('offset'), 0));
     const db = getDb();
 
     const whereClause = project ? 'WHERE s.project = ?' : '';
@@ -215,7 +221,7 @@ app.get('/api/dashboard/sessions', (c) => {
 
 app.get('/api/dashboard/sessions/:sessionId/observations', (c) => {
   try {
-    const sessionId = parseInt(c.req.param('sessionId'));
+    const sessionId = safeParseInt(c.req.param('sessionId'), NaN);
     const db = getDb();
     const observations = db.prepare(
       'SELECT * FROM observations WHERE session_id = ? ORDER BY created_at_epoch ASC'
@@ -284,7 +290,7 @@ app.get('/api/dashboard/stats', (c) => {
 app.get('/api/dashboard/feed', (c) => {
   try {
     const project = c.req.query('project');
-    const limit = clamp(parseInt(c.req.query('limit') || '30'), 1, MAX_LIMIT);
+    const limit = clamp(safeParseInt(c.req.query('limit'), 30), 1, MAX_LIMIT);
     const before = c.req.query('before');
     const db = getDb();
 
@@ -300,7 +306,7 @@ app.get('/api/dashboard/feed', (c) => {
     if (before) {
       obsConditions.push('o.created_at_epoch < ?');
       sumConditions.push('sm.created_at_epoch < ?');
-      params.push(parseInt(before));
+      params.push(safeParseInt(before, 0));
     }
 
     const obsWhere = obsConditions.length > 0 ? 'WHERE ' + obsConditions.join(' AND ') : '';
@@ -352,8 +358,8 @@ app.get('/api/search/index', (c) => {
       type: c.req.query('type'),
       dateStart: c.req.query('dateStart'),
       dateEnd: c.req.query('dateEnd'),
-      limit: clamp(parseInt(c.req.query('limit') || '20'), 1, MAX_LIMIT),
-      offset: Math.max(0, parseInt(c.req.query('offset') || '0')),
+      limit: clamp(safeParseInt(c.req.query('limit'), 20), 1, MAX_LIMIT),
+      offset: Math.max(0, safeParseInt(c.req.query('offset'), 0)),
     });
 
     const formatted = formatSearchIndex(results);
@@ -366,11 +372,11 @@ app.get('/api/search/index', (c) => {
 
 app.get('/api/timeline', (c) => {
   try {
-    const anchorId = parseInt(c.req.query('anchor') || '');
+    const anchorId = safeParseInt(c.req.query('anchor'), NaN);
     if (isNaN(anchorId)) return c.json({ error: 'anchor parameter required (observation ID)' }, 400);
 
-    const depthBefore = clamp(parseInt(c.req.query('depth_before') || '5'), 1, MAX_DEPTH);
-    const depthAfter = clamp(parseInt(c.req.query('depth_after') || '5'), 1, MAX_DEPTH);
+    const depthBefore = clamp(safeParseInt(c.req.query('depth_before'), 5), 1, MAX_DEPTH);
+    const depthAfter = clamp(safeParseInt(c.req.query('depth_after'), 5), 1, MAX_DEPTH);
     const project = c.req.query('project');
 
     const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
@@ -408,7 +414,7 @@ app.get('/api/search', async (c) => {
     const q = c.req.query('q');
     const project = c.req.query('project');
     const mode = c.req.query('mode') || 'fts';
-    const limit = clamp(parseInt(c.req.query('limit') || '10'), 1, MAX_LIMIT);
+    const limit = clamp(safeParseInt(c.req.query('limit'), 10), 1, MAX_LIMIT);
 
     if (!q) return c.json({ error: 'q parameter required' }, 400);
 
@@ -437,7 +443,7 @@ app.get('/api/search', async (c) => {
 
 app.delete('/api/observations/:id', (c) => {
   try {
-    const id = parseInt(c.req.param('id'));
+    const id = safeParseInt(c.req.param('id'), NaN);
     if (isNaN(id)) return c.json({ error: 'Invalid ID' }, 400);
     const deleted = deleteObservation(id);
     if (!deleted) return c.json({ error: 'Observation not found' }, 404);
@@ -450,7 +456,7 @@ app.delete('/api/observations/:id', (c) => {
 
 app.delete('/api/summaries/:id', (c) => {
   try {
-    const id = parseInt(c.req.param('id'));
+    const id = safeParseInt(c.req.param('id'), NaN);
     if (isNaN(id)) return c.json({ error: 'Invalid ID' }, 400);
     const deleted = deleteSummary(id);
     if (!deleted) return c.json({ error: 'Summary not found' }, 404);
@@ -463,7 +469,7 @@ app.delete('/api/summaries/:id', (c) => {
 
 app.delete('/api/sessions/:id', (c) => {
   try {
-    const id = parseInt(c.req.param('id'));
+    const id = safeParseInt(c.req.param('id'), NaN);
     if (isNaN(id)) return c.json({ error: 'Invalid ID' }, 400);
     const deleted = deleteSession(id);
     if (!deleted) return c.json({ error: 'Session not found' }, 404);

@@ -162,7 +162,6 @@ async function runQuery(systemPrompt: string, userMessage: string): Promise<stri
         systemPrompt,
         maxTurns: 1,
         tools: [],               // no tools — pure text generation
-        disallowedTools: ['*'],   // extra safety: disallow everything
       },
     });
 

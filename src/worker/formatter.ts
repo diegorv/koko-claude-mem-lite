@@ -1,11 +1,12 @@
 import type { Observation, SearchIndexResult } from '../db/queries.js';
 
 const TYPE_ICONS: Record<string, string> = {
+  bugfix: '🔴',
+  feature: '🟢',
+  refactor: '🟣',
   discovery: '🔵',
-  implementation: '🟣',
-  debugging: '🔴',
-  architecture: '🧠',
-  raw: '⚪',
+  decision: '🧠',
+  change: '⚪',
 };
 
 function typeIcon(type: string): string {

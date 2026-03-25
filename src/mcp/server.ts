@@ -37,7 +37,15 @@ async function callWorker(
       return { content: [{ type: 'text', text: `Error (${resp.status}): ${text}` }], isError: true };
     }
 
-    const data = await resp.json() as any;
+    let data: any;
+    try {
+      data = await resp.json();
+    } catch {
+      return {
+        content: [{ type: 'text', text: `Worker returned invalid JSON (status ${resp.status})` }],
+        isError: true,
+      };
+    }
     // Worker returns { content: [{ type, text }] } format
     if (data.content) return data;
     // Fallback: wrap raw JSON
@@ -67,7 +75,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           query: { type: 'string', description: 'Search query (FTS5 syntax supported)' },
           project: { type: 'string', description: 'Filter by project name' },
-          type: { type: 'string', description: 'Filter by observation type: discovery, implementation, debugging, architecture, raw' },
+          type: { type: 'string', description: 'Filter by observation type: bugfix, feature, refactor, discovery, decision, change' },
           limit: { type: 'number', description: 'Max results (default 20)' },
         },
         required: ['query'],
