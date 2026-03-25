@@ -8,12 +8,18 @@ import { readJsonFromStdin } from './stdin.js';
 import { normalizeInput, formatContextOutput, formatSilentOutput } from './adapter.js';
 import { stripPrivateTags } from '../utils/privacy.js';
 import { getProjectName } from '../utils/paths.js';
+import { isProjectExcluded } from '../utils/settings.js';
 import { workerFetch, spawnWorker } from './worker-spawn.js';
 
 // --- Handlers ---
 
 async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<void> {
   const project = getProjectName(input.cwd);
+
+  if (isProjectExcluded(project)) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
 
   const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
   if (!res || !res.ok) {
@@ -37,6 +43,11 @@ async function handleSessionInit(input: ReturnType<typeof normalizeInput>): Prom
   }
 
   const project = getProjectName(input.cwd);
+
+  if (isProjectExcluded(project)) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
   const prompt = input.prompt ? stripPrivateTags(input.prompt) : undefined;
 
   await workerFetch('/api/sessions', {
@@ -62,6 +73,12 @@ async function handleObservation(input: ReturnType<typeof normalizeInput>): Prom
   }
 
   if (IGNORED_TOOLS.has(input.toolName)) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+
+  const project = getProjectName(input.cwd);
+  if (isProjectExcluded(project)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
