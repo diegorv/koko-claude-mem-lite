@@ -111,6 +111,19 @@ describe('OBSERVER_SYSTEM_PROMPT', () => {
   it('includes fact quality guidance about no pronouns', () => {
     expect(OBSERVER_SYSTEM_PROMPT).toContain('no pronouns');
   });
+
+  it('does not include files_read in output schema (aligned with extraction prompt)', () => {
+    // files_read is noise — git blame covers it. Only files_modified matters.
+    const outputSection = OBSERVER_SYSTEM_PROMPT.split('OUTPUT FORMAT')[1] || '';
+    expect(outputSection).not.toContain('<files_read>');
+    expect(outputSection).toContain('<files_modified>');
+  });
+
+  it('includes TITLE EXAMPLES section', () => {
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('TITLE EXAMPLES');
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('GOOD:');
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('BAD:');
+  });
 });
 
 describe('OBSERVATION_EXTRACTION_PROMPT', () => {

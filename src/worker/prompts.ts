@@ -83,14 +83,18 @@ OUTPUT FORMAT
     <concept>gotcha</concept>
     <concept>problem-solution</concept>
   </concepts>
-  <files_read>
-    <file>path/to/file</file>
-  </files_read>
   <files_modified>
     <file>path/to/file</file>
   </files_modified>
 </observation>
 \`\`\`
+
+TITLE EXAMPLES:
+- GOOD: "matcher must be * because resume sessions are missed"
+- GOOD: "Agent SDK ignores systemPrompt option in query mode"
+- BAD: "Fixed hook matcher" (what was the insight?)
+- BAD: "Updated authentication module" (the code shows this)
+- BAD: "Explored codebase structure" (no insight)
 
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
 
