@@ -271,12 +271,17 @@ app.get('/api/dashboard/stats', (c) => {
       ORDER BY day ASC
     `).all(Date.now() - 7 * 86400000) as { day: string; count: number }[];
 
+    const pendingMessages = db.prepare('SELECT COUNT(*) as count FROM pending_messages').get() as { count: number };
+    const activeObserverIds = getActiveSessionIds();
+
     return c.json({
       sessions: sessions.count,
       activeSessions: activeSessions.count,
       observations: observations.count,
       summaries: summaries.count,
       projects: projects.count,
+      pendingMessages: pendingMessages.count,
+      activeObservers: activeObserverIds.length,
       types,
       daily,
       uptime: Math.floor(process.uptime()),

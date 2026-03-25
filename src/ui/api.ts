@@ -12,6 +12,8 @@ export interface Stats {
   observations: number;
   summaries: number;
   projects: number;
+  pendingMessages: number;
+  activeObservers: number;
   types: { type: string; count: number }[];
   daily: { day: string; count: number }[];
   uptime: number;

@@ -4647,12 +4647,16 @@ app.get("/api/dashboard/stats", (c) => {
       GROUP BY date(created_at)
       ORDER BY day ASC
     `).all(Date.now() - 7 * 864e5);
+    const pendingMessages = db2.prepare("SELECT COUNT(*) as count FROM pending_messages").get();
+    const activeObserverIds = getActiveSessionIds();
     return c.json({
       sessions: sessions.count,
       activeSessions: activeSessions2.count,
       observations: observations.count,
       summaries: summaries.count,
       projects: projects.count,
+      pendingMessages: pendingMessages.count,
+      activeObservers: activeObserverIds.length,
       types,
       daily,
       uptime: Math.floor(process.uptime())

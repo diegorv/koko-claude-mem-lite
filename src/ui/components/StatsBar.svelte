@@ -35,6 +35,15 @@
     <div class="value">{stats.summaries}</div>
   </div>
   <div class="stat-card">
+    <div class="label">Queue</div>
+    <div class="value">{stats.pendingMessages ?? 0}</div>
+    {#if stats.activeObservers > 0}
+      <div class="stat-sub">{stats.activeObservers} observer{stats.activeObservers > 1 ? 's' : ''} active</div>
+    {:else}
+      <div class="stat-sub">idle</div>
+    {/if}
+  </div>
+  <div class="stat-card">
     <div class="label">Activity (7d)</div>
     {#if stats.daily && stats.daily.length > 0}
       <div class="sparkline">
