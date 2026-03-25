@@ -13,9 +13,9 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   WORKER_PORT: 37888,
-  OBSERVATION_COUNT: 50,
-  FULL_OBSERVATION_COUNT: 5,
-  SUMMARY_COUNT: 3,
+  OBSERVATION_COUNT: 25,
+  FULL_OBSERVATION_COUNT: 3,
+  SUMMARY_COUNT: 2,
   OLLAMA_URL: 'http://localhost:11434',
   OLLAMA_MODEL: 'bge-m3',
   SKIP_TOOLS: 'Read,Glob,Grep,LSP',
