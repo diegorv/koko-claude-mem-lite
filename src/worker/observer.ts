@@ -9,13 +9,12 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
+import type { ParsedObservation, ParsedSummary } from './summarizer.js';
 import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt } from './prompts.js';
 import { DurableQueue, type PendingMessage } from './durable-queue.js';
-import { deletePending, getPendingCount, forceUnstickAll } from '../db/pending-store.js';
-import { setMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
-import { embedObservation } from '../embeddings/embeddings.js';
-import { getDb } from '../db/database.js';
+import { processMessage, extractAssistantText, type PendingResult } from './message-processor.js';
+import { getPendingCount, forceUnstickAll } from '../db/pending-store.js';
+import { setMemorySessionId } from '../db/queries.js';
 import { logger } from '../utils/logger.js';
 
 // Re-export registry functions so existing imports from './observer.js' still work
@@ -53,12 +52,6 @@ function findClaudeExecutable(): string {
 
 const MAX_RESTARTS = 3;
 
-// --- Pending result tracking ---
-
-interface PendingResult<T> {
-  resolve: (value: T) => void;
-}
-
 export type RegisterObserverFn = (contentSessionId: string, session: ObserverSession) => void;
 
 // --- ObserverSession ---
@@ -92,7 +85,6 @@ export class ObserverSession {
     this.onReplace = onReplace || (() => {});
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
 
-    // Unstick any orphaned processing messages from previous runs
     const unstuck = forceUnstickAll(contentSessionId);
     if (unstuck > 0) logger.info('observer', `Constructor unstuck ${unstuck} messages for ${contentSessionId}`);
 
@@ -135,7 +127,6 @@ export class ObserverSession {
     this.abortController.abort();
     this.queue.close();
 
-    // Kill the SDK subprocess
     if (this.conversation) {
       logger.info('observer', `Closing SDK conversation for ${this.contentSessionId}`);
       try { this.conversation.close(); } catch (err) {
@@ -237,10 +228,7 @@ export class ObserverSession {
           }
 
           if (message.type === 'assistant') {
-            const content = (message as any).message?.content;
-            const text = Array.isArray(content)
-              ? content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
-              : typeof content === 'string' ? content : '';
+            const text = extractAssistantText(message);
 
             if (text.length > 0) {
               logger.info('observer', `Assistant response (${text.length} chars) for ${this.contentSessionId}`);
@@ -248,7 +236,7 @@ export class ObserverSession {
 
             if (processingMsgs.length > 0 && text) {
               const msg = processingMsgs.shift()!;
-              this.resolveAndCleanup(msg, text);
+              processMessage(msg, text, this.contentSessionId, this.pendingResults);
             }
           }
 
@@ -270,7 +258,7 @@ export class ObserverSession {
       if (processingMsgs.length > 0) {
         logger.info('observer', `Resolving ${processingMsgs.length} leftover pending msgs with empty text`);
         for (const leftover of processingMsgs) {
-          this.resolveAndCleanup(leftover, '');
+          processMessage(leftover, '', this.contentSessionId, this.pendingResults);
         }
         processingMsgs.length = 0;
       }
@@ -305,67 +293,6 @@ export class ObserverSession {
           logger.warn('observer', `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
         }
         this.destroy();
-      }
-    }
-  }
-
-  private resolveAndCleanup(msg: PendingMessage, text: string): void {
-    if (msg.kind === 'observation' && text) {
-      const parsed = parseObservationXml(text);
-      if (parsed && parsed.type !== 'skip') {
-        const session = getSessionByContentId(this.contentSessionId);
-        if (session) {
-          try {
-            const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
-            deletePending(msg.id);
-            if (!result.deduplicated) {
-              embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
-                .catch(err => logger.error('observer', 'embedding failed', err));
-            }
-          } catch (err) {
-            logger.error('observer', 'Failed to store observation', err);
-            return;
-          }
-        } else {
-          deletePending(msg.id);
-        }
-      } else {
-        deletePending(msg.id);
-      }
-      const pending = this.pendingResults.get(msg.id);
-      if (pending) {
-        this.pendingResults.delete(msg.id);
-        pending.resolve(parsed ?? null);
-      }
-    } else if (msg.kind === 'summary' && text) {
-      const parsed = parseSummaryXml(text);
-      if (parsed) {
-        const session = getSessionByContentId(this.contentSessionId);
-        if (session) {
-          try {
-            storeSummary(session.id, session.project, parsed);
-            deletePending(msg.id);
-          } catch (err) {
-            logger.error('observer', 'Failed to store summary', err);
-            return;
-          }
-        } else {
-          deletePending(msg.id);
-        }
-      } else {
-        deletePending(msg.id);
-      }
-      const pending = this.pendingResults.get(msg.id);
-      if (pending) {
-        this.pendingResults.delete(msg.id);
-        pending.resolve(parsed ?? null);
-      }
-    } else {
-      deletePending(msg.id);
-      const pending = this.pendingResults.get(msg.id);
-      if (pending) {
-        this.pendingResults.delete(msg.id);
-        pending.resolve(null);
       }
     }
   }
