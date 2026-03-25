@@ -60,7 +60,8 @@ git commit -m "chore: bump version to ${NEW_VERSION}"
 git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
 
 echo ""
-echo "Created tag ${NEW_TAG}"
+echo "Pushing main and ${NEW_TAG} to origin..."
+git push origin main "$NEW_TAG"
+
 echo ""
-echo "Run the following to push and trigger the release workflow:"
-echo "  git push origin main ${NEW_TAG}"
+echo "Released ${NEW_TAG}"
