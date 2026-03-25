@@ -48,7 +48,11 @@ export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
   const envVal = process.env[`MEMORY_LITE_${key}`];
   if (envVal !== undefined) {
     const def = DEFAULTS[key];
-    if (typeof def === 'number') return Number(envVal) as Settings[K];
+    if (typeof def === 'number') {
+      const num = Number(envVal);
+      if (isNaN(num)) return def as Settings[K];
+      return num as Settings[K];
+    }
     return envVal as Settings[K];
   }
   return getSettings()[key];
