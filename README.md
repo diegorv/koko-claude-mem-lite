@@ -14,6 +14,13 @@
 > [!WARNING]
 > **We are not accepting pull requests, issues, or external contributions at this time.**
 
+> [!NOTE]
+> **Looking for a production-ready memory plugin? Use [claude-mem](https://github.com/thedotmack/claude-mem) instead.**
+>
+> memory-lite was inspired by [claude-mem](https://github.com/thedotmack/claude-mem) — a mature, well-tested memory plugin for Claude Code. No code was copied or derived from that project; this is an independent reimplementation exploring different architectural ideas (multi-turn observer, Svelte dashboard, MCP progressive disclosure, etc.).
+>
+> If you just want memory that works today, **claude-mem is the right choice**. memory-lite is an experimental project and not recommended for regular use.
+
 A privacy-first memory plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Automatically captures what happens during your coding sessions, compresses it with AI, and re-injects the context when you start a new session — so Claude remembers what you were working on.
 
 ## How It Works
