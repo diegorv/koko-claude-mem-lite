@@ -3416,67 +3416,80 @@ OUTPUT FORMAT
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
 var OBSERVATION_EXTRACTION_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
 
-WHAT TO RECORD \u2014 focus on deliverables and knowledge:
-- What the system NOW DOES differently (new capabilities, fixes, configs)
-- Bugs found with root cause ("X broke because Y")
-- Non-obvious gotchas and workarounds
-- Architecture decisions with rationale
-- API behaviors or quirks discovered
+WHAT TO RECORD \u2014 only knowledge you can't re-derive from code or git:
+- Bugs found with root cause ("X broke because Y, fixed by Z")
+- Non-obvious gotchas and workarounds discovered during debugging
+- Architecture decisions with rationale ("chose X over Y because Z")
+- API behaviors, quirks, or undocumented limitations
+- Integration issues between systems with specifics
 
-WHEN TO SKIP \u2014 output nothing if the tool use is:
-- Empty status checks, simple file listings, package installs with no errors
-- Repetitive operations already documented
-- File reads that reveal nothing surprising
-- Routine edits with no interesting context (import changes, formatting)
+WHEN TO SKIP \u2014 the vast majority of tool uses should be skipped. Skip if:
+- File reads, searches, or exploration that reveal nothing surprising
+- Any edit where the code change speaks for itself (import changes, formatting, renames, CSS)
+- Build/test succeeded or failed \u2014 ephemeral status
+- Version bumps, git operations (commit, push, tag), plugin install/uninstall
+- "X was added/created/updated/modified/implemented" \u2014 the code is the source of truth
+- Package installs with no errors or surprising behavior
+- Describing what a file or module does (the code itself is the documentation)
+- Comparing two projects/codebases (the comparison is ephemeral context)
+- Plan creation, task tracking, or meta-tooling operations
+- Anything where the title alone tells you everything \u2014 no deeper insight needed
 If skipping, output ONLY: <observation><type>skip</type></observation>
 
 TYPES:
-- bugfix: something was broken, now fixed
-- feature: new capability added
-- refactor: code restructured, behavior unchanged
-- discovery: learning about existing system (only if non-obvious insight)
+- bugfix: something was broken, now fixed (must include root cause)
+- feature: new capability added (only if non-trivial, with design rationale)
+- discovery: non-obvious insight about existing system behavior
 - decision: architectural/design choice with rationale
-- change: generic modification (docs, config, misc)
+- change: significant config or integration change (not routine edits)
 
 FORMAT:
 \`\`\`xml
 <observation>
-  <type>bugfix | feature | refactor | discovery | decision | change</type>
-  <title>Short title capturing the core action (5-10 words)</title>
+  <type>bugfix | feature | discovery | decision | change</type>
+  <title>Capture the INSIGHT, not the action (5-10 words)</title>
   <facts>
     <fact>Concise self-contained statement with specifics (filenames, values, behaviors)</fact>
   </facts>
-  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
-  <files_read>
-    <file>path/to/file</file>
-  </files_read>
+  <narrative>Why this matters for future sessions (1-2 sentences max)</narrative>
   <files_modified>
     <file>path/to/file</file>
   </files_modified>
 </observation>
 \`\`\`
 
+TITLE EXAMPLES:
+- GOOD: "matcher must be * because resume sessions are missed"
+- GOOD: "Agent SDK ignores systemPrompt option in query mode"
+- BAD: "Fixed hook matcher" (what was the insight?)
+- BAD: "Updated authentication module" (the code shows this)
+- BAD: "Explored codebase structure" (no insight)
+
 CRITICAL RULES:
-- Record what was LEARNED/BUILT/FIXED, not that you are observing
-- NO generic titles like "File X was read" or "Function Y was added" \u2014 capture the INSIGHT
-- facts must be specific and self-contained (no pronouns, include file paths and values)
-- Output ONLY the XML block, nothing else`;
-var SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary.
+- When in doubt, SKIP. A small number of high-signal observations beats many low-signal ones.
+- Record what was LEARNED, not what was DONE \u2014 the git log records actions.
+- Title must contain the insight itself, not just name the topic.
+- Narrative should explain WHY this matters, not describe the change.
+- Skip files_read \u2014 only include files_modified (files read are in git blame).
+- Output ONLY the XML block, nothing else.`;
+var SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary for FUTURE sessions.
 
 Output format:
 \`\`\`xml
 <summary>
-  <request>What the user originally asked for</request>
-  <investigated>What was explored or researched</investigated>
-  <learned>Key findings or discoveries</learned>
-  <completed>What was actually done/implemented</completed>
-  <next_steps>What remains to be done</next_steps>
+  <request>What the user originally asked for (1 sentence)</request>
+  <learned>Non-obvious gotchas, root causes, or insights discovered (1-2 sentences). Only include things you can't re-derive from reading the code.</learned>
+  <completed>What was accomplished \u2014 the outcome, not the process (1 sentence)</completed>
+  <next_steps>Only items that aren't obvious from the code or git history. Omit if nothing non-obvious remains.</next_steps>
 </summary>
 \`\`\`
 
 Rules:
-- Be concise (1-3 sentences per field)
-- Focus on actionable information
+- NEVER include: commit hashes, tag names, file lists, step-by-step process logs, or build commands
+- "completed" is the OUTCOME ("auth middleware now validates JWT expiry"), not the PROCESS ("edited auth.ts, ran tests, committed")
+- "learned" must contain INSIGHTS, not descriptions ("SDK ignores systemPrompt in query mode" not "used the Agent SDK")
+- "next_steps" should be empty rather than listing obvious follow-ups like "run tests" or "restart"
+- Omit "investigated" \u2014 it adds noise without signal
 - Output ONLY the XML block, nothing else`;
 var CLEANUP_SYSTEM_PROMPT = `You are an extremely aggressive memory quality filter. Your job is to DELETE everything that won't help a developer in a FUTURE session. Only KEEP observations that contain genuinely actionable technical knowledge.
 
@@ -3781,9 +3794,9 @@ var DurableQueue = class {
 import { existsSync as existsSync3, readFileSync, writeFileSync } from "fs";
 var DEFAULTS = {
   WORKER_PORT: 37888,
-  OBSERVATION_COUNT: 50,
-  FULL_OBSERVATION_COUNT: 5,
-  SUMMARY_COUNT: 3,
+  OBSERVATION_COUNT: 25,
+  FULL_OBSERVATION_COUNT: 3,
+  SUMMARY_COUNT: 2,
   OLLAMA_URL: "http://localhost:11434",
   OLLAMA_MODEL: "bge-m3",
   SKIP_TOOLS: "Read,Glob,Grep,LSP"
@@ -4620,6 +4633,17 @@ function generateContextDetailed(project) {
     detailedIds
   };
 }
+var TYPE_ICONS2 = {
+  bugfix: "[fix]",
+  feature: "[feat]",
+  refactor: "[refactor]",
+  discovery: "[discovery]",
+  decision: "[decision]",
+  change: "[change]"
+};
+function typeIcon2(type) {
+  return TYPE_ICONS2[type] || `[${type}]`;
+}
 function generateContext(project) {
   const observationCount = getSetting("OBSERVATION_COUNT");
   const fullDetailCount = getSetting("FULL_OBSERVATION_COUNT");
@@ -4629,80 +4653,61 @@ function generateContext(project) {
   if (summaries.length === 0 && observations.length === 0) {
     return "";
   }
+  const fullIds = new Set(observations.slice(0, fullDetailCount).map((o) => o.id));
+  const timeline = [
+    ...observations.map((o) => ({ kind: "observation", epoch: o.created_at_epoch, data: o })),
+    ...summaries.map((s) => ({ kind: "summary", epoch: s.created_at_epoch, data: s }))
+  ];
+  timeline.sort((a, b) => a.epoch - b.epoch);
+  const dayGroups = /* @__PURE__ */ new Map();
+  for (const entry of timeline) {
+    const day = formatDay(entry.data.created_at);
+    if (!dayGroups.has(day)) dayGroups.set(day, []);
+    dayGroups.get(day).push(entry);
+  }
   const lines = [];
-  lines.push(`<memory-lite-context>`);
+  lines.push("<memory-lite-context>");
   lines.push(`# Memory Context | ${project}`);
   lines.push("");
-  if (summaries.length > 0) {
-    lines.push("## Recent Summaries");
-    for (const s of summaries) {
-      const date = new Date(s.created_at).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-      });
-      lines.push(`### ${date} - ${s.request || "Session"}`);
-      if (s.completed) lines.push(`- **Completed:** ${s.completed}`);
-      if (s.learned) lines.push(`- **Learned:** ${s.learned}`);
-      if (s.next_steps) lines.push(`- **Next steps:** ${s.next_steps}`);
-      lines.push("");
-    }
-  }
-  if (observations.length > 0) {
-    lines.push("## Recent Activity");
-    lines.push("| Time | Type | Title | Files |");
-    lines.push("|------|------|-------|-------|");
-    for (const obs of observations) {
-      const time = new Date(obs.created_at).toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-      });
-      const files = [
-        ...parseJsonArray2(obs.files_read),
-        ...parseJsonArray2(obs.files_modified)
-      ].map((f) => basename(f)).join(", ");
-      lines.push(`| ${time} | ${obs.type} | ${obs.title || "-"} | ${files || "-"} |`);
-    }
-    lines.push("");
-    const detailed = observations.slice(0, fullDetailCount);
-    if (detailed.length > 0) {
-      lines.push(`## Details (last ${detailed.length})`);
-      for (const obs of detailed) {
-        lines.push(`### #${obs.id} - ${obs.title || "Untitled"}`);
-        const facts = parseJsonArray2(obs.facts);
-        if (facts.length > 0) {
-          lines.push(`**Facts:** ${facts.join("; ")}`);
+  for (const [day, entries] of dayGroups) {
+    lines.push(`### ${day}`);
+    for (const entry of entries) {
+      if (entry.kind === "summary") {
+        const s = entry.data;
+        lines.push(`S${s.id} ${s.request || "Session"}`);
+        if (s.learned) lines.push(`  Learned: ${s.learned}`);
+        if (s.next_steps) lines.push(`  Next: ${s.next_steps}`);
+      } else {
+        const obs = entry.data;
+        const time = formatTime2(obs.created_at);
+        const isFull = fullIds.has(obs.id);
+        if (isFull) {
+          lines.push(`**${obs.id}** ${time} ${typeIcon2(obs.type)} **${obs.title || "Untitled"}**`);
+          if (obs.narrative) {
+            lines.push(`  ${obs.narrative}`);
+          }
+        } else {
+          lines.push(`${obs.id} ${time} ${typeIcon2(obs.type)} ${obs.title || "-"}`);
         }
-        if (obs.narrative) {
-          lines.push(`**Narrative:** ${obs.narrative}`);
-        }
-        const filesRead = parseJsonArray2(obs.files_read);
-        const filesMod = parseJsonArray2(obs.files_modified);
-        if (filesRead.length > 0 || filesMod.length > 0) {
-          const parts = [];
-          if (filesRead.length > 0) parts.push(`read: ${filesRead.join(", ")}`);
-          if (filesMod.length > 0) parts.push(`modified: ${filesMod.join(", ")}`);
-          lines.push(`**Files:** ${parts.join(" | ")}`);
-        }
-        lines.push("");
       }
     }
+    lines.push("");
   }
   lines.push("</memory-lite-context>");
   return lines.join("\n");
 }
-function parseJsonArray2(json) {
-  if (!json) return [];
-  try {
-    const arr = JSON.parse(json);
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
+function formatDay(iso) {
+  return new Date(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric"
+  });
 }
-function basename(path) {
-  return path.split("/").pop() || path;
+function formatTime2(iso) {
+  return new Date(iso).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
 }
 
 // src/worker/routes/dashboard.ts
