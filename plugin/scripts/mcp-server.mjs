@@ -20924,6 +20924,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           query: { type: "string", description: "Search query (FTS5 syntax supported)" },
           project: { type: "string", description: "Filter by project name" },
           type: { type: "string", description: "Filter by observation type: bugfix, feature, refactor, discovery, decision, change" },
+          dateStart: { type: "string", description: "Filter observations on or after this date (ISO 8601, e.g. 2024-01-15)" },
+          dateEnd: { type: "string", description: "Filter observations on or before this date (ISO 8601, e.g. 2024-01-31)" },
           limit: { type: "number", description: "Max results (default 20)" }
         },
         required: ["query"]
@@ -20968,6 +20970,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       params.set("q", args.query);
       if (args.project) params.set("project", args.project);
       if (args.type) params.set("type", args.type);
+      if (args.dateStart) params.set("dateStart", args.dateStart);
+      if (args.dateEnd) params.set("dateEnd", args.dateEnd);
       if (args.limit) params.set("limit", String(args.limit));
       return callWorker(`/api/search/index?${params}`);
     }
