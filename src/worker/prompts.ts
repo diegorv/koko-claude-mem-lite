@@ -77,51 +77,62 @@ IMPORTANT: Never reference yourself or your own actions. Do not output anything 
 
 export const OBSERVATION_EXTRACTION_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
 
-WHAT TO RECORD — focus on deliverables and knowledge:
-- What the system NOW DOES differently (new capabilities, fixes, configs)
-- Bugs found with root cause ("X broke because Y")
-- Non-obvious gotchas and workarounds
-- Architecture decisions with rationale
-- API behaviors or quirks discovered
+WHAT TO RECORD — only knowledge you can't re-derive from code or git:
+- Bugs found with root cause ("X broke because Y, fixed by Z")
+- Non-obvious gotchas and workarounds discovered during debugging
+- Architecture decisions with rationale ("chose X over Y because Z")
+- API behaviors, quirks, or undocumented limitations
+- Integration issues between systems with specifics
 
-WHEN TO SKIP — output nothing if the tool use is:
-- Empty status checks, simple file listings, package installs with no errors
-- Repetitive operations already documented
-- File reads that reveal nothing surprising
-- Routine edits with no interesting context (import changes, formatting)
+WHEN TO SKIP — the vast majority of tool uses should be skipped. Skip if:
+- File reads, searches, or exploration that reveal nothing surprising
+- Any edit where the code change speaks for itself (import changes, formatting, renames, CSS)
+- Build/test succeeded or failed — ephemeral status
+- Version bumps, git operations (commit, push, tag), plugin install/uninstall
+- "X was added/created/updated/modified/implemented" — the code is the source of truth
+- Package installs with no errors or surprising behavior
+- Describing what a file or module does (the code itself is the documentation)
+- Comparing two projects/codebases (the comparison is ephemeral context)
+- Plan creation, task tracking, or meta-tooling operations
+- Anything where the title alone tells you everything — no deeper insight needed
 If skipping, output ONLY: <observation><type>skip</type></observation>
 
 TYPES:
-- bugfix: something was broken, now fixed
-- feature: new capability added
-- refactor: code restructured, behavior unchanged
-- discovery: learning about existing system (only if non-obvious insight)
+- bugfix: something was broken, now fixed (must include root cause)
+- feature: new capability added (only if non-trivial, with design rationale)
+- discovery: non-obvious insight about existing system behavior
 - decision: architectural/design choice with rationale
-- change: generic modification (docs, config, misc)
+- change: significant config or integration change (not routine edits)
 
 FORMAT:
 \`\`\`xml
 <observation>
-  <type>bugfix | feature | refactor | discovery | decision | change</type>
-  <title>Short title capturing the core action (5-10 words)</title>
+  <type>bugfix | feature | discovery | decision | change</type>
+  <title>Capture the INSIGHT, not the action (5-10 words)</title>
   <facts>
     <fact>Concise self-contained statement with specifics (filenames, values, behaviors)</fact>
   </facts>
-  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
-  <files_read>
-    <file>path/to/file</file>
-  </files_read>
+  <narrative>Why this matters for future sessions (1-2 sentences max)</narrative>
   <files_modified>
     <file>path/to/file</file>
   </files_modified>
 </observation>
 \`\`\`
 
+TITLE EXAMPLES:
+- GOOD: "matcher must be * because resume sessions are missed"
+- GOOD: "Agent SDK ignores systemPrompt option in query mode"
+- BAD: "Fixed hook matcher" (what was the insight?)
+- BAD: "Updated authentication module" (the code shows this)
+- BAD: "Explored codebase structure" (no insight)
+
 CRITICAL RULES:
-- Record what was LEARNED/BUILT/FIXED, not that you are observing
-- NO generic titles like "File X was read" or "Function Y was added" — capture the INSIGHT
-- facts must be specific and self-contained (no pronouns, include file paths and values)
-- Output ONLY the XML block, nothing else`;
+- When in doubt, SKIP. A small number of high-signal observations beats many low-signal ones.
+- Record what was LEARNED, not what was DONE — the git log records actions.
+- Title must contain the insight itself, not just name the topic.
+- Narrative should explain WHY this matters, not describe the change.
+- Skip files_read — only include files_modified (files read are in git blame).
+- Output ONLY the XML block, nothing else.`;
 
 export const SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary.
 
