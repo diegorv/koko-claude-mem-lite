@@ -134,22 +134,24 @@ CRITICAL RULES:
 - Skip files_read — only include files_modified (files read are in git blame).
 - Output ONLY the XML block, nothing else.`;
 
-export const SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary.
+export const SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary for FUTURE sessions.
 
 Output format:
 \`\`\`xml
 <summary>
-  <request>What the user originally asked for</request>
-  <investigated>What was explored or researched</investigated>
-  <learned>Key findings or discoveries</learned>
-  <completed>What was actually done/implemented</completed>
-  <next_steps>What remains to be done</next_steps>
+  <request>What the user originally asked for (1 sentence)</request>
+  <learned>Non-obvious gotchas, root causes, or insights discovered (1-2 sentences). Only include things you can't re-derive from reading the code.</learned>
+  <completed>What was accomplished — the outcome, not the process (1 sentence)</completed>
+  <next_steps>Only items that aren't obvious from the code or git history. Omit if nothing non-obvious remains.</next_steps>
 </summary>
 \`\`\`
 
 Rules:
-- Be concise (1-3 sentences per field)
-- Focus on actionable information
+- NEVER include: commit hashes, tag names, file lists, step-by-step process logs, or build commands
+- "completed" is the OUTCOME ("auth middleware now validates JWT expiry"), not the PROCESS ("edited auth.ts, ran tests, committed")
+- "learned" must contain INSIGHTS, not descriptions ("SDK ignores systemPrompt in query mode" not "used the Agent SDK")
+- "next_steps" should be empty rather than listing obvious follow-ups like "run tests" or "restart"
+- Omit "investigated" — it adds noise without signal
 - Output ONLY the XML block, nothing else`;
 
 export const CLEANUP_SYSTEM_PROMPT = `You are an extremely aggressive memory quality filter. Your job is to DELETE everything that won't help a developer in a FUTURE session. Only KEEP observations that contain genuinely actionable technical knowledge.
