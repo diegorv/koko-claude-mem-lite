@@ -1,5 +1,11 @@
 # memory-lite
 
+> **This project is in a very early stage of development and is not recommended for use by anyone.**
+> There is a real risk of data loss, unexpected behavior, and breaking changes without notice.
+> Do not rely on it for preserving important context or memory data.
+>
+> **We are not accepting pull requests, issues, or external contributions at this time.**
+
 A privacy-first memory plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Automatically captures what happens during your coding sessions, compresses it with AI, and re-injects the context when you start a new session — so Claude remembers what you were working on.
 
 ## How It Works
