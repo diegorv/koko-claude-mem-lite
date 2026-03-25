@@ -35,7 +35,9 @@ function writePid(): void {
 function removePid(): void {
   try {
     if (existsSync(pidPath)) unlinkSync(pidPath);
-  } catch { /* ignore */ }
+  } catch (err) {
+    logger.warn('worker', 'Failed to remove PID file', err);
+  }
 }
 
 let shutdownInitiated = false;

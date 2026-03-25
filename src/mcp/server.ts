@@ -146,6 +146,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
+// Parent heartbeat: exit if parent process (Claude Code) dies
+if (process.ppid) {
+  const parentPid = process.ppid;
+  const heartbeat = setInterval(() => {
+    try { process.kill(parentPid, 0); } catch {
+      console.error('[memory-lite-mcp] Parent process died, exiting');
+      process.exit(0);
+    }
+  }, 30_000);
+  heartbeat.unref();
+}
+
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
