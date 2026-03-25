@@ -12,7 +12,7 @@ export function isDbReady(): boolean {
   return dbReady;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -52,7 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_obs_hash ON observations(content_hash, created_at
 
 CREATE TABLE IF NOT EXISTS summaries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id INTEGER UNIQUE NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   project TEXT NOT NULL,
   request TEXT,
   investigated TEXT,
@@ -100,8 +100,29 @@ END;
 // Incremental migrations keyed by target version number.
 // Each function runs when upgrading FROM (version - 1) TO that version.
 const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
-  // Example for future use:
-  // 3: (db) => { db.exec('ALTER TABLE observations ADD COLUMN embedding_model TEXT'); },
+  3: (db) => {
+    // Drop UNIQUE constraint on summaries.session_id to allow multiple summaries per session.
+    // SQLite doesn't support DROP CONSTRAINT, so we recreate the table.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS summaries_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        project TEXT NOT NULL,
+        request TEXT,
+        investigated TEXT,
+        learned TEXT,
+        completed TEXT,
+        next_steps TEXT,
+        created_at TEXT NOT NULL,
+        created_at_epoch INTEGER NOT NULL
+      );
+      INSERT INTO summaries_new SELECT * FROM summaries;
+      DROP TABLE summaries;
+      ALTER TABLE summaries_new RENAME TO summaries;
+      CREATE INDEX IF NOT EXISTS idx_sum_project ON summaries(project, created_at_epoch DESC);
+      CREATE INDEX IF NOT EXISTS idx_sum_session ON summaries(session_id);
+    `);
+  },
 };
 
 function initializeSchema(database: Database.Database): void {

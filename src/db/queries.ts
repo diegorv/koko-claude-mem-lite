@@ -152,7 +152,7 @@ export interface SummaryInput {
 
 export function storeSummary(sessionId: number, project: string, summary: SummaryInput): number {
   const result = getDb().prepare(
-    `INSERT OR REPLACE INTO summaries (session_id, project, request, investigated, learned, completed, next_steps, created_at, created_at_epoch)
+    `INSERT INTO summaries (session_id, project, request, investigated, learned, completed, next_steps, created_at, created_at_epoch)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId, project,

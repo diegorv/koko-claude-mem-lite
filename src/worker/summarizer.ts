@@ -49,14 +49,21 @@ function extractArray(content: string, arrayName: string, elementName: string): 
   return elements;
 }
 
+const VALID_TYPES = new Set(['bugfix', 'feature', 'refactor', 'discovery', 'decision', 'change', 'skip']);
+
 export function parseObservationXml(text: string): ParsedObservation | null {
   const obsRegex = /<observation>([\s\S]*?)<\/observation>/;
   const match = obsRegex.exec(text);
   if (!match) return null;
 
   const content = match[1];
+  const rawType = extractField(content, 'type') || 'discovery';
+  const type = VALID_TYPES.has(rawType) ? rawType : (() => {
+    logger.warn('summarizer', `Unknown observation type "${rawType}", defaulting to "discovery"`);
+    return 'discovery';
+  })();
   return {
-    type: extractField(content, 'type') || 'discovery',
+    type,
     title: extractField(content, 'title'),
     facts: extractArray(content, 'facts', 'fact'),
     narrative: extractField(content, 'narrative'),
