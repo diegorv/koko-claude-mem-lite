@@ -69,6 +69,8 @@ async function handleObservation(input: ReturnType<typeof normalizeInput>): Prom
   const cleanInput = input.toolInput ? stripPrivateTags(input.toolInput) : '';
   const cleanResponse = input.toolResponse ? stripPrivateTags(input.toolResponse) : '';
 
+  // Fire-and-forget: observations are non-critical. Use short timeout with no retries
+  // so a slow/stuck worker never blocks Claude Code for more than 3s per tool call.
   await workerFetch('/api/observations', {
     method: 'POST',
     body: JSON.stringify({
@@ -78,7 +80,7 @@ async function handleObservation(input: ReturnType<typeof normalizeInput>): Prom
       tool_response: cleanResponse,
       cwd: input.cwd,
     }),
-  });
+  }, 0, 3_000);
 
   console.log(JSON.stringify(formatSilentOutput()));
 }

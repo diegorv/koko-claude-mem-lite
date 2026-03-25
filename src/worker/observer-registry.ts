@@ -8,6 +8,8 @@ import { getPendingCount, forceUnstickAll } from '../db/pending-store.js';
 import { getMemorySessionId } from '../db/queries.js';
 import { logger } from '../utils/logger.js';
 
+const MAX_OBSERVERS = 10;
+
 const activeSessions = new Map<string, ObserverSession>();
 const creatingSessions = new Set<string>();
 
@@ -25,6 +27,22 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
     if (session && !session.isDestroyed()) return session;
   }
   creatingSessions.add(contentSessionId);
+
+  // Evict oldest session if cap is reached to prevent unbounded process accumulation
+  if (activeSessions.size >= MAX_OBSERVERS) {
+    let oldestId: string | null = null;
+    let oldestTime = Infinity;
+    for (const [id, s] of activeSessions) {
+      if (s.lastActivityTime < oldestTime) {
+        oldestTime = s.lastActivityTime;
+        oldestId = id;
+      }
+    }
+    if (oldestId) {
+      logger.warn('observer', `Observer cap (${MAX_OBSERVERS}) reached, evicting oldest session ${oldestId}`);
+      destroyObserver(oldestId);
+    }
+  }
 
   // CRITICAL (Issue #817 from claude-mem): Never resume with stale memorySessionId.
   const staleMemorySessionId = getMemorySessionId(contentSessionId);

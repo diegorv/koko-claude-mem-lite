@@ -13,11 +13,11 @@ import { getSetting } from '../utils/settings.js';
 
 const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
 
-export async function workerFetch(path: string, options?: RequestInit, retries = 2): Promise<Response | null> {
+export async function workerFetch(path: string, options?: RequestInit, retries = 2, timeoutMs = 10_000): Promise<Response | null> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(`${WORKER_BASE}${path}`, {
         ...options,
         signal: controller.signal,

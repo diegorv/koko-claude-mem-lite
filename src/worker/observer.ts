@@ -197,7 +197,7 @@ export class ObserverSession {
 
       this.conversation = conversation;
 
-      const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+      const QUERY_IDLE_TIMEOUT_MS = 90 * 1000;
       let lastMessageTime = Date.now();
       let sdkMessageCount = 0;
       const idleChecker = setInterval(() => {

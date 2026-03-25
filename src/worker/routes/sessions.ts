@@ -80,21 +80,19 @@ sessionRoutes.post('/observations', async (c) => {
       return c.json({ ok: true, queued: true });
     }
 
-    // No observer session — use single-turn fallback (still awaited for result)
-    const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
+    // No observer session — fire-and-forget fallback so the hook is never blocked
+    const sessionId = session.id;
+    const project = session.project;
+    extractObservation(tool_name, cleanInput, cleanResponse, cwd).then(parsed => {
+      if (!parsed || parsed.type === 'skip') return;
+      const result = storeObservation(sessionId, project, parsed, contentSessionId);
+      if (!result.deduplicated) {
+        embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
+          .catch(err => logger.error('routes', 'embedding failed', err));
+      }
+    }).catch(err => logger.error('routes', 'extractObservation fallback error', err));
 
-    if (!parsed || parsed.type === 'skip') {
-      return c.json({ ok: true, skipped: true });
-    }
-
-    const result = storeObservation(session.id, session.project, parsed, contentSessionId);
-
-    if (!result.deduplicated) {
-      embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
-        .catch(err => logger.error('routes', 'embedding failed', err));
-    }
-
-    return c.json({ ok: true, observationId: result.id, deduplicated: result.deduplicated });
+    return c.json({ ok: true, queued: true });
   } catch (error) {
     logger.error('routes', '/api/observations error', error);
     return c.json({ error: 'Failed to store observation' }, 500);

@@ -142,9 +142,9 @@ import { homedir as homedir2 } from "os";
 import { existsSync as existsSync2, readFileSync, writeFileSync } from "fs";
 var DEFAULTS = {
   WORKER_PORT: 37888,
-  OBSERVATION_COUNT: 50,
-  FULL_OBSERVATION_COUNT: 5,
-  SUMMARY_COUNT: 3,
+  OBSERVATION_COUNT: 25,
+  FULL_OBSERVATION_COUNT: 3,
+  SUMMARY_COUNT: 2,
   OLLAMA_URL: "http://localhost:11434",
   OLLAMA_MODEL: "bge-m3",
   SKIP_TOOLS: "Read,Glob,Grep,LSP"
@@ -179,11 +179,11 @@ function getSetting(key) {
 
 // src/hooks/worker-spawn.ts
 var WORKER_BASE = `http://127.0.0.1:${getSetting("WORKER_PORT")}`;
-async function workerFetch(path, options, retries = 2) {
+async function workerFetch(path, options, retries = 2, timeoutMs = 1e4) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 1e4);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(`${WORKER_BASE}${path}`, {
         ...options,
         signal: controller.signal,
@@ -368,7 +368,7 @@ async function handleObservation(input) {
       tool_response: cleanResponse,
       cwd: input.cwd
     })
-  });
+  }, 0, 3e3);
   console.log(JSON.stringify(formatSilentOutput()));
 }
 async function handleSummarize(input) {

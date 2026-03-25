@@ -3976,6 +3976,7 @@ function extractAssistantText(message) {
 }
 
 // src/worker/observer-registry.ts
+var MAX_OBSERVERS = 10;
 var activeSessions = /* @__PURE__ */ new Map();
 var creatingSessions = /* @__PURE__ */ new Set();
 function registerObserver(contentSessionId, session) {
@@ -3989,6 +3990,20 @@ function getOrCreateObserver(contentSessionId, project, userPrompt) {
     if (session && !session.isDestroyed()) return session;
   }
   creatingSessions.add(contentSessionId);
+  if (activeSessions.size >= MAX_OBSERVERS) {
+    let oldestId = null;
+    let oldestTime = Infinity;
+    for (const [id, s] of activeSessions) {
+      if (s.lastActivityTime < oldestTime) {
+        oldestTime = s.lastActivityTime;
+        oldestId = id;
+      }
+    }
+    if (oldestId) {
+      logger.warn("observer", `Observer cap (${MAX_OBSERVERS}) reached, evicting oldest session ${oldestId}`);
+      destroyObserver(oldestId);
+    }
+  }
   const staleMemorySessionId = getMemorySessionId(contentSessionId);
   if (staleMemorySessionId) {
     logger.warn("observer", `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
@@ -4184,7 +4199,7 @@ var ObserverSession = class _ObserverSession {
         }
       });
       this.conversation = conversation;
-      const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1e3;
+      const QUERY_IDLE_TIMEOUT_MS = 90 * 1e3;
       let lastMessageTime = Date.now();
       let sdkMessageCount = 0;
       const idleChecker = setInterval(() => {
@@ -4349,15 +4364,16 @@ sessionRoutes.post("/observations", async (c) => {
       });
       return c.json({ ok: true, queued: true });
     }
-    const parsed = await extractObservation(tool_name, cleanInput, cleanResponse, cwd);
-    if (!parsed || parsed.type === "skip") {
-      return c.json({ ok: true, skipped: true });
-    }
-    const result = storeObservation(session.id, session.project, parsed, contentSessionId);
-    if (!result.deduplicated) {
-      embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("routes", "embedding failed", err));
-    }
-    return c.json({ ok: true, observationId: result.id, deduplicated: result.deduplicated });
+    const sessionId = session.id;
+    const project = session.project;
+    extractObservation(tool_name, cleanInput, cleanResponse, cwd).then((parsed) => {
+      if (!parsed || parsed.type === "skip") return;
+      const result = storeObservation(sessionId, project, parsed, contentSessionId);
+      if (!result.deduplicated) {
+        embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("routes", "embedding failed", err));
+      }
+    }).catch((err) => logger.error("routes", "extractObservation fallback error", err));
+    return c.json({ ok: true, queued: true });
   } catch (error) {
     logger.error("routes", "/api/observations error", error);
     return c.json({ error: "Failed to store observation" }, 500);
