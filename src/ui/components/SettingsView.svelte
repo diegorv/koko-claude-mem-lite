@@ -91,6 +91,20 @@
       </label>
     </div>
 
+    <div class="settings-section">
+      <label class="setting-field">
+        <span class="setting-label">Skip tools</span>
+        <span class="setting-hint">Comma-separated tool names to ignore in PostToolUse (e.g. Read,Glob,Grep)</span>
+        <input type="text" bind:value={settings.SKIP_TOOLS} />
+      </label>
+
+      <label class="setting-field">
+        <span class="setting-label">Excluded projects</span>
+        <span class="setting-hint">Comma-separated project names to skip entirely. Supports * wildcard (e.g. private-*,temp*)</span>
+        <input type="text" bind:value={settings.EXCLUDED_PROJECTS} />
+      </label>
+    </div>
+
     <div class="settings-actions">
       <button class="save-btn" onclick={save} disabled={saving}>
         {saving ? 'Saving...' : 'Save Settings'}
