@@ -2919,7 +2919,7 @@ var dbReady = false;
 function isDbReady() {
   return dbReady;
 }
-var SCHEMA_VERSION = 2;
+var SCHEMA_VERSION = 3;
 var SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
@@ -2958,7 +2958,7 @@ CREATE INDEX IF NOT EXISTS idx_obs_hash ON observations(content_hash, created_at
 
 CREATE TABLE IF NOT EXISTS summaries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id INTEGER UNIQUE NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   project TEXT NOT NULL,
   request TEXT,
   investigated TEXT,
@@ -3003,8 +3003,27 @@ CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
 END;
 `;
 var MIGRATIONS = {
-  // Example for future use:
-  // 3: (db) => { db.exec('ALTER TABLE observations ADD COLUMN embedding_model TEXT'); },
+  3: (db2) => {
+    db2.exec(`
+      CREATE TABLE IF NOT EXISTS summaries_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        project TEXT NOT NULL,
+        request TEXT,
+        investigated TEXT,
+        learned TEXT,
+        completed TEXT,
+        next_steps TEXT,
+        created_at TEXT NOT NULL,
+        created_at_epoch INTEGER NOT NULL
+      );
+      INSERT INTO summaries_new SELECT * FROM summaries;
+      DROP TABLE summaries;
+      ALTER TABLE summaries_new RENAME TO summaries;
+      CREATE INDEX IF NOT EXISTS idx_sum_project ON summaries(project, created_at_epoch DESC);
+      CREATE INDEX IF NOT EXISTS idx_sum_session ON summaries(session_id);
+    `);
+  }
 };
 function initializeSchema(database) {
   database.pragma("journal_mode = WAL");
@@ -3139,7 +3158,7 @@ function getRecentObservations(project, limit) {
 }
 function storeSummary(sessionId, project, summary) {
   const result = getDb().prepare(
-    `INSERT OR REPLACE INTO summaries (session_id, project, request, investigated, learned, completed, next_steps, created_at, created_at_epoch)
+    `INSERT INTO summaries (session_id, project, request, investigated, learned, completed, next_steps, created_at, created_at_epoch)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId,
@@ -3159,9 +3178,10 @@ function getRecentSummaries(project, limit) {
     "SELECT * FROM summaries WHERE project = ? ORDER BY created_at_epoch DESC LIMIT ?"
   ).all(project, limit);
 }
+var MAX_FTS_TOKENS = 32;
 function sanitizeFtsQuery(query3) {
-  const cleaned = query3.replace(/[""]/g, "");
-  const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0);
+  const cleaned = query3.replace(/["\u201C\u201D]/g, "");
+  const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0).slice(0, MAX_FTS_TOKENS);
   if (tokens.length === 0) return '""';
   return tokens.map((t) => `"${t}"`).join(" ");
 }
@@ -3270,11 +3290,12 @@ function getTimelineAroundObservation(anchorId, depthBefore = 5, depthAfter = 5,
 
 // src/worker/formatter.ts
 var TYPE_ICONS = {
+  bugfix: "\u{1F534}",
+  feature: "\u{1F7E2}",
+  refactor: "\u{1F7E3}",
   discovery: "\u{1F535}",
-  implementation: "\u{1F7E3}",
-  debugging: "\u{1F534}",
-  architecture: "\u{1F9E0}",
-  raw: "\u26AA"
+  decision: "\u{1F9E0}",
+  change: "\u26AA"
 };
 function typeIcon(type) {
   return TYPE_ICONS[type] || "\u26AA";
@@ -3561,13 +3582,19 @@ function extractArray(content, arrayName, elementName) {
   }
   return elements;
 }
+var VALID_TYPES = /* @__PURE__ */ new Set(["bugfix", "feature", "refactor", "discovery", "decision", "change", "skip"]);
 function parseObservationXml(text) {
   const obsRegex = /<observation>([\s\S]*?)<\/observation>/;
   const match2 = obsRegex.exec(text);
   if (!match2) return null;
   const content = match2[1];
+  const rawType = extractField(content, "type") || "discovery";
+  const type = VALID_TYPES.has(rawType) ? rawType : (() => {
+    logger.warn("summarizer", `Unknown observation type "${rawType}", defaulting to "discovery"`);
+    return "discovery";
+  })();
   return {
-    type: extractField(content, "type") || "discovery",
+    type,
     title: extractField(content, "title"),
     facts: extractArray(content, "facts", "fact"),
     narrative: extractField(content, "narrative"),
@@ -3660,10 +3687,8 @@ async function runQuery(systemPrompt, userMessage) {
         model: "claude-sonnet-4-6",
         systemPrompt,
         maxTurns: 1,
-        tools: [],
+        tools: []
         // no tools — pure text generation
-        disallowedTools: ["*"]
-        // extra safety: disallow everything
       }
     });
     let resultText = "";
@@ -3763,8 +3788,16 @@ import { query as query2 } from "@anthropic-ai/claude-agent-sdk";
 
 // src/db/pending-store.ts
 var STUCK_TIMEOUT_MS = 6e4;
+var MAX_PENDING_PER_SESSION = 200;
 function enqueuePending(contentSessionId, kind, prompt) {
-  const result = getDb().prepare(
+  const db2 = getDb();
+  const count = getPendingCount(contentSessionId);
+  if (count >= MAX_PENDING_PER_SESSION) {
+    db2.prepare(
+      "DELETE FROM pending_messages WHERE id IN (SELECT id FROM pending_messages WHERE content_session_id = ? ORDER BY id ASC LIMIT 1)"
+    ).run(contentSessionId);
+  }
+  const result = db2.prepare(
     "INSERT INTO pending_messages (content_session_id, kind, prompt, created_at_epoch) VALUES (?, ?, ?, ?)"
   ).run(contentSessionId, kind, prompt, Date.now());
   return Number(result.lastInsertRowid);
@@ -4257,15 +4290,6 @@ var ObserverSession = class _ObserverSession {
       logger.info("observer", `Conversation ended for ${this.contentSessionId} (remaining=${remainingCount}, restarts=${this.restartCount}/${MAX_RESTARTS}, destroyed=${this.destroyed})`);
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
         logger.info("observer", `${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
-        forceUnstickAll(this.contentSessionId);
-        const replacement = new _ObserverSession(
-          this.contentSessionId,
-          this.project,
-          void 0,
-          this.memorySessionId,
-          this.restartCount + 1
-        );
-        activeSessions.set(this.contentSessionId, replacement);
         this.destroyed = true;
         this.abortController.abort();
         this.queue.close();
@@ -4280,6 +4304,15 @@ var ObserverSession = class _ObserverSession {
           pending.resolve(null);
         }
         this.pendingResults.clear();
+        forceUnstickAll(this.contentSessionId);
+        const replacement = new _ObserverSession(
+          this.contentSessionId,
+          this.project,
+          void 0,
+          this.memorySessionId,
+          this.restartCount + 1
+        );
+        activeSessions.set(this.contentSessionId, replacement);
       } else {
         if (remainingCount > 0) {
           logger.warn("observer", `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
@@ -4349,9 +4382,15 @@ var ObserverSession = class _ObserverSession {
   }
 };
 var activeSessions = /* @__PURE__ */ new Map();
+var creatingSessions = /* @__PURE__ */ new Set();
 function getOrCreateObserver(contentSessionId, project, userPrompt) {
   let session = activeSessions.get(contentSessionId);
   if (session && !session.isDestroyed()) return session;
+  if (creatingSessions.has(contentSessionId)) {
+    session = activeSessions.get(contentSessionId);
+    if (session && !session.isDestroyed()) return session;
+  }
+  creatingSessions.add(contentSessionId);
   const staleMemorySessionId = getMemorySessionId(contentSessionId);
   if (staleMemorySessionId) {
     logger.warn("observer", `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
@@ -4361,10 +4400,14 @@ function getOrCreateObserver(contentSessionId, project, userPrompt) {
     const unstuck = forceUnstickAll(contentSessionId);
     if (unstuck > 0) logger.info("observer", `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
   }
-  session = new ObserverSession(contentSessionId, project, userPrompt, null);
-  activeSessions.set(contentSessionId, session);
-  logger.info("observer", `Created session for ${contentSessionId} (project: ${project})`);
-  return session;
+  try {
+    session = new ObserverSession(contentSessionId, project, userPrompt, null);
+    activeSessions.set(contentSessionId, session);
+    logger.info("observer", `Created session for ${contentSessionId} (project: ${project})`);
+    return session;
+  } finally {
+    creatingSessions.delete(contentSessionId);
+  }
 }
 function getObserver(contentSessionId) {
   const session = activeSessions.get(contentSessionId);
@@ -4412,6 +4455,11 @@ var MAX_DEPTH = 50;
 var MAX_BATCH = 100;
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+function safeParseInt(value, fallback) {
+  if (!value) return fallback;
+  const n = parseInt(value, 10);
+  return isNaN(n) ? fallback : n;
 }
 app.get("/api/health", (c) => c.json({ ok: true }));
 app.get("/api/readiness", (c) => {
@@ -4524,8 +4572,8 @@ app.post("/api/sessions/complete", async (c) => {
 app.get("/api/dashboard/sessions", (c) => {
   try {
     const project = c.req.query("project");
-    const limit = clamp(parseInt(c.req.query("limit") || "50"), 1, MAX_LIMIT);
-    const offset = Math.max(0, parseInt(c.req.query("offset") || "0"));
+    const limit = clamp(safeParseInt(c.req.query("limit"), 50), 1, MAX_LIMIT);
+    const offset = Math.max(0, safeParseInt(c.req.query("offset"), 0));
     const db2 = getDb();
     const whereClause = project ? "WHERE s.project = ?" : "";
     const params = project ? [project, limit, offset] : [limit, offset];
@@ -4554,7 +4602,7 @@ app.get("/api/dashboard/sessions", (c) => {
 });
 app.get("/api/dashboard/sessions/:sessionId/observations", (c) => {
   try {
-    const sessionId = parseInt(c.req.param("sessionId"));
+    const sessionId = safeParseInt(c.req.param("sessionId"), NaN);
     const db2 = getDb();
     const observations = db2.prepare(
       "SELECT * FROM observations WHERE session_id = ? ORDER BY created_at_epoch ASC"
@@ -4617,7 +4665,7 @@ app.get("/api/dashboard/stats", (c) => {
 app.get("/api/dashboard/feed", (c) => {
   try {
     const project = c.req.query("project");
-    const limit = clamp(parseInt(c.req.query("limit") || "30"), 1, MAX_LIMIT);
+    const limit = clamp(safeParseInt(c.req.query("limit"), 30), 1, MAX_LIMIT);
     const before = c.req.query("before");
     const db2 = getDb();
     const obsConditions = [];
@@ -4631,7 +4679,7 @@ app.get("/api/dashboard/feed", (c) => {
     if (before) {
       obsConditions.push("o.created_at_epoch < ?");
       sumConditions.push("sm.created_at_epoch < ?");
-      params.push(parseInt(before));
+      params.push(safeParseInt(before, 0));
     }
     const obsWhere = obsConditions.length > 0 ? "WHERE " + obsConditions.join(" AND ") : "";
     const sumWhere = sumConditions.length > 0 ? "WHERE " + sumConditions.join(" AND ") : "";
@@ -4672,8 +4720,8 @@ app.get("/api/search/index", (c) => {
       type: c.req.query("type"),
       dateStart: c.req.query("dateStart"),
       dateEnd: c.req.query("dateEnd"),
-      limit: clamp(parseInt(c.req.query("limit") || "20"), 1, MAX_LIMIT),
-      offset: Math.max(0, parseInt(c.req.query("offset") || "0"))
+      limit: clamp(safeParseInt(c.req.query("limit"), 20), 1, MAX_LIMIT),
+      offset: Math.max(0, safeParseInt(c.req.query("offset"), 0))
     });
     const formatted = formatSearchIndex(results);
     return c.json({ content: [{ type: "text", text: formatted }] });
@@ -4684,10 +4732,10 @@ app.get("/api/search/index", (c) => {
 });
 app.get("/api/timeline", (c) => {
   try {
-    const anchorId = parseInt(c.req.query("anchor") || "");
+    const anchorId = safeParseInt(c.req.query("anchor"), NaN);
     if (isNaN(anchorId)) return c.json({ error: "anchor parameter required (observation ID)" }, 400);
-    const depthBefore = clamp(parseInt(c.req.query("depth_before") || "5"), 1, MAX_DEPTH);
-    const depthAfter = clamp(parseInt(c.req.query("depth_after") || "5"), 1, MAX_DEPTH);
+    const depthBefore = clamp(safeParseInt(c.req.query("depth_before"), 5), 1, MAX_DEPTH);
+    const depthAfter = clamp(safeParseInt(c.req.query("depth_after"), 5), 1, MAX_DEPTH);
     const project = c.req.query("project");
     const { anchor, before, after } = getTimelineAroundObservation(anchorId, depthBefore, depthAfter, project);
     if (!anchor) return c.json({ error: "Observation not found" }, 404);
@@ -4720,7 +4768,7 @@ app.get("/api/search", async (c) => {
     const q = c.req.query("q");
     const project = c.req.query("project");
     const mode = c.req.query("mode") || "fts";
-    const limit = clamp(parseInt(c.req.query("limit") || "10"), 1, MAX_LIMIT);
+    const limit = clamp(safeParseInt(c.req.query("limit"), 10), 1, MAX_LIMIT);
     if (!q) return c.json({ error: "q parameter required" }, 400);
     if (mode === "semantic") {
       const vecResults = await searchSemantic(getDb(), q, limit);
@@ -4743,7 +4791,7 @@ app.get("/api/search", async (c) => {
 });
 app.delete("/api/observations/:id", (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
+    const id = safeParseInt(c.req.param("id"), NaN);
     if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
     const deleted = deleteObservation(id);
     if (!deleted) return c.json({ error: "Observation not found" }, 404);
@@ -4755,7 +4803,7 @@ app.delete("/api/observations/:id", (c) => {
 });
 app.delete("/api/summaries/:id", (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
+    const id = safeParseInt(c.req.param("id"), NaN);
     if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
     const deleted = deleteSummary(id);
     if (!deleted) return c.json({ error: "Summary not found" }, 404);
@@ -4767,7 +4815,7 @@ app.delete("/api/summaries/:id", (c) => {
 });
 app.delete("/api/sessions/:id", (c) => {
   try {
-    const id = parseInt(c.req.param("id"));
+    const id = safeParseInt(c.req.param("id"), NaN);
     if (isNaN(id)) return c.json({ error: "Invalid ID" }, 400);
     const deleted = deleteSession(id);
     if (!deleted) return c.json({ error: "Session not found" }, 404);
@@ -4908,7 +4956,8 @@ function writePid() {
 function removePid() {
   try {
     if (existsSync5(pidPath)) unlinkSync(pidPath);
-  } catch {
+  } catch (err) {
+    logger.warn("worker", "Failed to remove PID file", err);
   }
 }
 var shutdownInitiated = false;
