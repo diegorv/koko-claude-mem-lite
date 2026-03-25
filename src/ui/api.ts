@@ -128,6 +128,32 @@ export function deleteSession(id: number): Promise<{ ok: boolean }> {
   return fetchDelete(`/api/sessions/${id}`);
 }
 
+// Live view
+export interface LiveObserver {
+  contentSessionId: string;
+  project: string;
+  lastActivityAge: number;
+  pendingCount: number;
+}
+
+export interface LiveQueueItem {
+  id: number;
+  content_session_id: string;
+  kind: 'observation' | 'summary';
+  status: string;
+  created_at_epoch: number;
+  project: string | null;
+}
+
+export interface LiveData {
+  observers: LiveObserver[];
+  queue: LiveQueueItem[];
+}
+
+export function getLive(): Promise<LiveData> {
+  return fetchJson('/api/dashboard/live');
+}
+
 // Context preview
 export interface ContextBreakdown {
   context: string;

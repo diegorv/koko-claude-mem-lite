@@ -109,3 +109,11 @@ export function getSessionAge(contentSessionId: string): number {
   if (!session) return Infinity;
   return Date.now() - session.lastActivityTime;
 }
+
+export function getObserverDetails(): { contentSessionId: string; project: string; lastActivityAge: number }[] {
+  return Array.from(activeSessions.entries()).map(([id, s]) => ({
+    contentSessionId: id,
+    project: s.project,
+    lastActivityAge: Date.now() - s.lastActivityTime,
+  }));
+}

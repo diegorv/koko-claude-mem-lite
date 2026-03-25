@@ -7,11 +7,12 @@
   import SearchView from './components/SearchView.svelte';
   import ContextView from './components/ContextView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import LiveView from './components/LiveView.svelte';
 
   let stats: Stats | null = $state(null);
   let projects: Project[] = $state([]);
   let selectedProject: string = $state('');
-  let activeTab: 'feed' | 'sessions' | 'search' | 'context' | 'settings' = $state('feed');
+  let activeTab: 'feed' | 'sessions' | 'search' | 'context' | 'live' | 'settings' = $state('feed');
   let searchQuery = $state('');
   let initError: string | null = $state(null);
   let runtimeError: string | null = $state(null);
@@ -69,6 +70,7 @@
       <button class:active={activeTab === 'sessions'} onclick={() => activeTab = 'sessions'}>Sessions</button>
       <button class:active={activeTab === 'search'} onclick={() => activeTab = 'search'}>Search</button>
       <button class:active={activeTab === 'context'} onclick={() => activeTab = 'context'}>Context</button>
+      <button class:active={activeTab === 'live'} onclick={() => activeTab = 'live'}>Live</button>
       <button class:active={activeTab === 'settings'} onclick={() => activeTab = 'settings'}>Settings</button>
     </div>
 
@@ -88,6 +90,8 @@
     <SearchView project={selectedProject} query={searchQuery} />
   {:else if activeTab === 'context'}
     <ContextView project={selectedProject} />
+  {:else if activeTab === 'live'}
+    <LiveView />
   {:else if activeTab === 'settings'}
     <SettingsView />
   {/if}

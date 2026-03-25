@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { getDb } from '../../db/database.js';
 import { generateContextDetailed } from '../../context/generator.js';
-import { getActiveSessionIds } from '../observer.js';
+import { getActiveSessionIds, getObserverDetails } from '../observer.js';
 import { logger } from '../../utils/logger.js';
 import { clamp, safeParseInt, MAX_LIMIT } from './utils.js';
 
@@ -171,6 +171,32 @@ dashboardRoutes.get('/dashboard/feed', (c) => {
   } catch (error) {
     logger.error('routes', '/api/dashboard/feed error', error);
     return c.json({ error: 'Failed to get feed' }, 500);
+  }
+});
+
+dashboardRoutes.get('/dashboard/live', (c) => {
+  try {
+    const db = getDb();
+    const observers = getObserverDetails().map(o => ({
+      ...o,
+      pendingCount: db.prepare(
+        'SELECT COUNT(*) as count FROM pending_messages WHERE content_session_id = ?'
+      ).get(o.contentSessionId) as { count: number } | undefined,
+    })).map(o => ({ ...o, pendingCount: (o.pendingCount as any)?.count ?? 0 }));
+
+    const queue = db.prepare(`
+      SELECT pm.id, pm.content_session_id, pm.kind, pm.status, pm.created_at_epoch,
+        s.project
+      FROM pending_messages pm
+      LEFT JOIN sessions s ON s.content_session_id = pm.content_session_id
+      ORDER BY pm.id ASC
+      LIMIT 200
+    `).all() as { id: number; content_session_id: string; kind: string; status: string; created_at_epoch: number; project: string | null }[];
+
+    return c.json({ observers, queue });
+  } catch (error) {
+    logger.error('routes', '/api/dashboard/live error', error);
+    return c.json({ error: 'Failed to get live data' }, 500);
   }
 });
 

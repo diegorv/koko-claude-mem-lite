@@ -18,7 +18,7 @@ import { setMemorySessionId } from '../db/queries.js';
 import { logger } from '../utils/logger.js';
 
 // Re-export registry functions so existing imports from './observer.js' still work
-export { getOrCreateObserver, getObserver, destroyObserver, destroyAllObservers, getActiveSessionIds, getSessionAge } from './observer-registry.js';
+export { getOrCreateObserver, getObserver, destroyObserver, destroyAllObservers, getActiveSessionIds, getSessionAge, getObserverDetails } from './observer-registry.js';
 
 // --- SDK environment helpers ---
 
