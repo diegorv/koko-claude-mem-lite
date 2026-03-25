@@ -146,7 +146,8 @@ var DEFAULTS = {
   FULL_OBSERVATION_COUNT: 5,
   SUMMARY_COUNT: 3,
   OLLAMA_URL: "http://localhost:11434",
-  OLLAMA_MODEL: "bge-m3"
+  OLLAMA_MODEL: "bge-m3",
+  SKIP_TOOLS: "Read,Glob,Grep,LSP"
 };
 var cached = null;
 function getSettings() {

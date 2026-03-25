@@ -3769,7 +3769,8 @@ var DEFAULTS = {
   FULL_OBSERVATION_COUNT: 5,
   SUMMARY_COUNT: 3,
   OLLAMA_URL: "http://localhost:11434",
-  OLLAMA_MODEL: "bge-m3"
+  OLLAMA_MODEL: "bge-m3",
+  SKIP_TOOLS: "Read,Glob,Grep,LSP"
 };
 var cached = null;
 function getSettings() {
@@ -4184,6 +4185,10 @@ var ObserverSession = class _ObserverSession {
             setMemorySessionId(this.contentSessionId, this.memorySessionId);
             logger.info("observer", `${prev ? "Updated" : "Captured"} memorySessionId for ${this.contentSessionId}`);
           }
+          if (message.type === "rate_limit_event") {
+            logger.warn("observer", `Rate limited \u2014 SDK will retry automatically for ${this.contentSessionId}`);
+            continue;
+          }
           if (message.type === "assistant") {
             const text = extractAssistantText(message);
             if (text.length > 0) {
@@ -4300,6 +4305,12 @@ sessionRoutes.post("/observations", async (c) => {
     }
     const session = getSessionByContentId(contentSessionId);
     if (!session) return c.json({ error: "Session not found" }, 404);
+    const skipTools = new Set(
+      getSetting("SKIP_TOOLS").split(",").map((s) => s.trim()).filter(Boolean)
+    );
+    if (skipTools.has(tool_name)) {
+      return c.json({ ok: true, skipped: true, reason: "tool_excluded" });
+    }
     const cleanInput = stripPrivateTags(tool_input || "");
     const cleanResponse = stripPrivateTags(tool_response || "");
     const observer = getObserver(contentSessionId);
@@ -4537,7 +4548,11 @@ searchRoutes.post("/observations/batch", async (c) => {
     if (ids.length > MAX_BATCH) {
       return c.json({ error: `Too many IDs (max ${MAX_BATCH})` }, 400);
     }
-    const observations = getObservationsByIds(ids.map(Number));
+    const numericIds = ids.map(Number);
+    if (numericIds.some(isNaN)) {
+      return c.json({ error: "All IDs must be valid integers" }, 400);
+    }
+    const observations = getObservationsByIds(numericIds);
     const formatted = formatObservationsFull(observations);
     return c.json({ content: [{ type: "text", text: formatted }] });
   } catch (error) {
