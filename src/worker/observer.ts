@@ -474,17 +474,8 @@ export class ObserverSession {
       logger.info('observer', `Conversation ended for ${this.contentSessionId} (remaining=${remainingCount}, restarts=${this.restartCount}/${MAX_RESTARTS}, destroyed=${this.destroyed})`);
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
         logger.info('observer', `${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
-        forceUnstickAll(this.contentSessionId);
 
-        // Create replacement BEFORE destroying old session to avoid
-        // a window where getObserver() returns undefined
-        const replacement = new ObserverSession(
-          this.contentSessionId, this.project, undefined,
-          this.memorySessionId, this.restartCount + 1,
-        );
-        activeSessions.set(this.contentSessionId, replacement);
-
-        // Now safe to tear down old session
+        // Tear down old session FIRST to prevent zombie SDK subprocesses
         this.destroyed = true;
         this.abortController.abort();
         this.queue.close();
@@ -496,6 +487,15 @@ export class ObserverSession {
           pending.resolve(null);
         }
         this.pendingResults.clear();
+
+        forceUnstickAll(this.contentSessionId);
+
+        // Create replacement after old subprocess is cleaned up
+        const replacement = new ObserverSession(
+          this.contentSessionId, this.project, undefined,
+          this.memorySessionId, this.restartCount + 1,
+        );
+        activeSessions.set(this.contentSessionId, replacement);
       } else {
         if (remainingCount > 0) {
           logger.warn('observer', `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
@@ -576,10 +576,18 @@ export class ObserverSession {
 // --- Session Manager ---
 
 const activeSessions = new Map<string, ObserverSession>();
+const creatingSessions = new Set<string>();
 
 export function getOrCreateObserver(contentSessionId: string, project: string, userPrompt?: string): ObserverSession {
   let session = activeSessions.get(contentSessionId);
   if (session && !session.isDestroyed()) return session;
+
+  // Guard against duplicate creation from concurrent calls
+  if (creatingSessions.has(contentSessionId)) {
+    session = activeSessions.get(contentSessionId);
+    if (session && !session.isDestroyed()) return session;
+  }
+  creatingSessions.add(contentSessionId);
 
   // CRITICAL (Issue #817 from claude-mem): Never resume with stale memorySessionId.
   // When creating a new in-memory session, any DB memorySessionId is STALE because
@@ -597,10 +605,14 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
     if (unstuck > 0) logger.info('observer', `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
   }
 
-  session = new ObserverSession(contentSessionId, project, userPrompt, null);
-  activeSessions.set(contentSessionId, session);
-  logger.info('observer', `Created session for ${contentSessionId} (project: ${project})`);
-  return session;
+  try {
+    session = new ObserverSession(contentSessionId, project, userPrompt, null);
+    activeSessions.set(contentSessionId, session);
+    logger.info('observer', `Created session for ${contentSessionId} (project: ${project})`);
+    return session;
+  } finally {
+    creatingSessions.delete(contentSessionId);
+  }
 }
 
 export function getObserver(contentSessionId: string): ObserverSession | undefined {
