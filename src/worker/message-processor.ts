@@ -37,28 +37,29 @@ function processObservation(
   contentSessionId: string,
   pendingResults: Map<number, PendingResult<ParsedObservation | ParsedSummary | null>>,
 ): void {
-  const parsed = parseObservationXml(text);
-  if (parsed && parsed.type !== 'skip') {
-    const session = getSessionByContentId(contentSessionId);
-    if (session) {
-      try {
+  let parsed: ParsedObservation | null = null;
+  try {
+    parsed = parseObservationXml(text);
+    if (parsed && parsed.type !== 'skip') {
+      const session = getSessionByContentId(contentSessionId);
+      if (session) {
         const result = storeObservation(session.id, session.project, parsed, contentSessionId);
         deletePending(msg.id);
         if (!result.deduplicated) {
           embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
             .catch(err => logger.error('message-processor', 'embedding failed', err));
         }
-      } catch (err) {
-        logger.error('message-processor', 'Failed to store observation', err);
-        return;
+      } else {
+        deletePending(msg.id);
       }
     } else {
       deletePending(msg.id);
     }
-  } else {
-    deletePending(msg.id);
+  } catch (err) {
+    logger.error('message-processor', 'Failed to store observation', err);
+  } finally {
+    resolvePending(msg.id, parsed ?? null, pendingResults);
   }
-  resolvePending(msg.id, parsed ?? null, pendingResults);
 }
 
 function processSummary(
@@ -67,24 +68,25 @@ function processSummary(
   contentSessionId: string,
   pendingResults: Map<number, PendingResult<ParsedObservation | ParsedSummary | null>>,
 ): void {
-  const parsed = parseSummaryXml(text);
-  if (parsed) {
-    const session = getSessionByContentId(contentSessionId);
-    if (session) {
-      try {
+  let parsed: ParsedSummary | null = null;
+  try {
+    parsed = parseSummaryXml(text);
+    if (parsed) {
+      const session = getSessionByContentId(contentSessionId);
+      if (session) {
         storeSummary(session.id, session.project, parsed);
         deletePending(msg.id);
-      } catch (err) {
-        logger.error('message-processor', 'Failed to store summary', err);
-        return;
+      } else {
+        deletePending(msg.id);
       }
     } else {
       deletePending(msg.id);
     }
-  } else {
-    deletePending(msg.id);
+  } catch (err) {
+    logger.error('message-processor', 'Failed to store summary', err);
+  } finally {
+    resolvePending(msg.id, parsed ?? null, pendingResults);
   }
-  resolvePending(msg.id, parsed ?? null, pendingResults);
 }
 
 function resolvePending(
