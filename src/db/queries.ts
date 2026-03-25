@@ -45,7 +45,7 @@ export function getSessionByContentId(contentSessionId: string): Session | null 
   return getDb().prepare('SELECT * FROM sessions WHERE content_session_id = ?').get(contentSessionId) as Session | null;
 }
 
-export function setMemorySessionId(contentSessionId: string, memorySessionId: string): void {
+export function setMemorySessionId(contentSessionId: string, memorySessionId: string | null): void {
   getDb().prepare(
     'UPDATE sessions SET memory_session_id = ? WHERE content_session_id = ?'
   ).run(memorySessionId, contentSessionId);

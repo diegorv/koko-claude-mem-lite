@@ -5,7 +5,7 @@
 
 import { ObserverSession } from './observer.js';
 import { getPendingCount, forceUnstickAll } from '../db/pending-store.js';
-import { getMemorySessionId } from '../db/queries.js';
+import { getMemorySessionId, setMemorySessionId } from '../db/queries.js';
 import { logger } from '../utils/logger.js';
 
 const MAX_OBSERVERS = 10;
@@ -48,6 +48,7 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
   const staleMemorySessionId = getMemorySessionId(contentSessionId);
   if (staleMemorySessionId) {
     logger.warn('observer', `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
+    setMemorySessionId(contentSessionId, null);
   }
 
   // Clean up any orphaned pending messages from previous runs
