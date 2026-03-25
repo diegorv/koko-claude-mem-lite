@@ -187,11 +187,13 @@ export interface SearchResult {
  * Wraps each token in double quotes to prevent FTS5 syntax errors
  * from special characters like *, -, AND, OR, NEAR, etc.
  */
+const MAX_FTS_TOKENS = 32;
+
 function sanitizeFtsQuery(query: string): string {
   // Remove characters that break FTS5 even inside quotes
-  const cleaned = query.replace(/[""]/g, '');
-  // Split into tokens and wrap each in quotes for safe MATCH
-  const tokens = cleaned.split(/\s+/).filter(t => t.length > 0);
+  const cleaned = query.replace(/["\u201C\u201D]/g, '');
+  // Split into tokens, limit count, and wrap each in quotes for safe MATCH
+  const tokens = cleaned.split(/\s+/).filter(t => t.length > 0).slice(0, MAX_FTS_TOKENS);
   if (tokens.length === 0) return '""';
   return tokens.map(t => `"${t}"`).join(' ');
 }

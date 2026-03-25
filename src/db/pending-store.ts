@@ -10,9 +10,18 @@ export interface PendingMessage {
 }
 
 const STUCK_TIMEOUT_MS = 60_000;
+const MAX_PENDING_PER_SESSION = 200;
 
 export function enqueuePending(contentSessionId: string, kind: 'observation' | 'summary', prompt: string): number {
-  const result = getDb().prepare(
+  const db = getDb();
+  const count = getPendingCount(contentSessionId);
+  if (count >= MAX_PENDING_PER_SESSION) {
+    // Drop oldest pending message to make room
+    db.prepare(
+      'DELETE FROM pending_messages WHERE id IN (SELECT id FROM pending_messages WHERE content_session_id = ? ORDER BY id ASC LIMIT 1)'
+    ).run(contentSessionId);
+  }
+  const result = db.prepare(
     'INSERT INTO pending_messages (content_session_id, kind, prompt, created_at_epoch) VALUES (?, ?, ?, ?)'
   ).run(contentSessionId, kind, prompt, Date.now());
   return Number(result.lastInsertRowid);
