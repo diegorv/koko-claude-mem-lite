@@ -43,8 +43,10 @@ export interface Observation {
   project: string;
   type: string;
   title: string | null;
+  subtitle: string | null;
   facts: string | null;
   narrative: string | null;
+  concepts: string | null;
   files_read: string | null;
   files_modified: string | null;
   created_at: string;
@@ -62,8 +64,10 @@ export interface FeedItem {
   // observation fields
   type?: string;
   title?: string | null;
+  subtitle?: string | null;
   facts?: string | null;
   narrative?: string | null;
+  concepts?: string | null;
   files_read?: string | null;
   files_modified?: string | null;
   // summary fields

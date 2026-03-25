@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { truncate, buildInitPrompt, buildObservationPrompt, buildSummaryPrompt } from '../../src/worker/prompts.js';
+import { truncate, buildInitPrompt, buildObservationPrompt, buildSummaryPrompt, OBSERVER_SYSTEM_PROMPT, OBSERVATION_EXTRACTION_PROMPT, CLEANUP_SYSTEM_PROMPT } from '../../src/worker/prompts.js';
 
 describe('truncate', () => {
   it('returns string unchanged when under maxLen', () => {
@@ -87,6 +87,65 @@ describe('buildObservationPrompt', () => {
   it('includes ISO timestamp', () => {
     const result = buildObservationPrompt('Tool', 'in', 'out');
     expect(result).toMatch(/<occurred_at>\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe('OBSERVER_SYSTEM_PROMPT', () => {
+  it('includes subtitle in XML schema', () => {
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('<subtitle>');
+  });
+
+  it('includes concepts in XML schema', () => {
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('<concepts>');
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('<concept>');
+  });
+
+  it('includes spatial awareness section', () => {
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('SPATIAL AWARENESS');
+  });
+
+  it('includes refactor as valid type', () => {
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('refactor');
+  });
+
+  it('includes fact quality guidance about no pronouns', () => {
+    expect(OBSERVER_SYSTEM_PROMPT).toContain('no pronouns');
+  });
+});
+
+describe('OBSERVATION_EXTRACTION_PROMPT', () => {
+  it('includes subtitle in XML schema', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).toContain('<subtitle>');
+  });
+
+  it('includes concepts in XML schema', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).toContain('<concepts>');
+  });
+
+  it('includes refactor as valid type', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).toContain('refactor');
+  });
+
+  it('asks for what-was-done narrative not just why-it-matters', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).toContain('What was done, how it works, why it matters');
+  });
+
+  it('does not skip comparative codebase analysis', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).not.toContain('Comparing two projects/codebases');
+  });
+
+  it('includes spatial awareness', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).toContain('SPATIAL AWARENESS');
+  });
+
+  it('includes fact standalone guidance', () => {
+    expect(OBSERVATION_EXTRACTION_PROMPT).toContain('stand alone');
+  });
+});
+
+describe('CLEANUP_SYSTEM_PROMPT', () => {
+  it('does not filter self-referential observations about the memory plugin', () => {
+    expect(CLEANUP_SYSTEM_PROMPT).not.toContain('Self-referential observations about the memory plugin');
   });
 });
 

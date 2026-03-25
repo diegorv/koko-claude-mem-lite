@@ -5,11 +5,16 @@ describe('parseObservationXml', () => {
   const validXml = `<observation>
   <type>feature</type>
   <title>Added user auth</title>
+  <subtitle>OAuth2 PKCE flow now handles login and token refresh.</subtitle>
   <facts>
     <fact>OAuth2 with PKCE flow implemented</fact>
     <fact>Tokens stored in httpOnly cookies</fact>
   </facts>
   <narrative>Implemented full OAuth2 authentication flow.</narrative>
+  <concepts>
+    <concept>how-it-works</concept>
+    <concept>what-changed</concept>
+  </concepts>
   <files_read>
     <file>src/auth.ts</file>
   </files_read>
@@ -19,13 +24,15 @@ describe('parseObservationXml', () => {
   </files_modified>
 </observation>`;
 
-  it('parses complete valid XML with all fields', () => {
+  it('parses complete valid XML with all fields including subtitle and concepts', () => {
     const result = parseObservationXml(validXml);
     expect(result).not.toBeNull();
     expect(result!.type).toBe('feature');
     expect(result!.title).toBe('Added user auth');
+    expect(result!.subtitle).toBe('OAuth2 PKCE flow now handles login and token refresh.');
     expect(result!.facts).toEqual(['OAuth2 with PKCE flow implemented', 'Tokens stored in httpOnly cookies']);
     expect(result!.narrative).toBe('Implemented full OAuth2 authentication flow.');
+    expect(result!.concepts).toEqual(['how-it-works', 'what-changed']);
     expect(result!.files_read).toEqual(['src/auth.ts']);
     expect(result!.files_modified).toEqual(['src/routes/login.ts', 'src/middleware/auth.ts']);
   });
@@ -44,10 +51,38 @@ describe('parseObservationXml', () => {
     expect(result).not.toBeNull();
     expect(result!.type).toBe('discovery');
     expect(result!.title).toBeNull();
+    expect(result!.subtitle).toBeNull();
     expect(result!.narrative).toBeNull();
     expect(result!.facts).toEqual([]);
+    expect(result!.concepts).toEqual([]);
     expect(result!.files_read).toEqual([]);
     expect(result!.files_modified).toEqual([]);
+  });
+
+  it('parses subtitle when present', () => {
+    const xml = '<observation><type>bugfix</type><subtitle>Short description here.</subtitle></observation>';
+    const result = parseObservationXml(xml);
+    expect(result!.subtitle).toBe('Short description here.');
+  });
+
+  it('returns null subtitle when absent', () => {
+    const xml = '<observation><type>bugfix</type><title>Fix crash</title></observation>';
+    const result = parseObservationXml(xml);
+    expect(result!.subtitle).toBeNull();
+  });
+
+  it('parses concepts array', () => {
+    const xml = `<observation><type>decision</type>
+      <concepts><concept>gotcha</concept><concept>trade-off</concept></concepts>
+    </observation>`;
+    const result = parseObservationXml(xml);
+    expect(result!.concepts).toEqual(['gotcha', 'trade-off']);
+  });
+
+  it('returns empty concepts array when absent', () => {
+    const xml = '<observation><type>change</type></observation>';
+    const result = parseObservationXml(xml);
+    expect(result!.concepts).toEqual([]);
   });
 
   it('handles empty <facts> block', () => {

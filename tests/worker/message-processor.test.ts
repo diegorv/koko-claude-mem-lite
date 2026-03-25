@@ -95,7 +95,7 @@ describe('processMessage', () => {
     vi.mocked(storeObservation).mockImplementation(() => { throw new Error('DB write failed'); });
 
     const { parseObservationXml } = await import('../../src/worker/xml-parser.js');
-    vi.mocked(parseObservationXml).mockReturnValue({ type: 'feature', title: 'test', narrative: '', facts: [], files_read: [], files_modified: [] });
+    vi.mocked(parseObservationXml).mockReturnValue({ type: 'feature', title: 'test', subtitle: null, narrative: '', facts: [], concepts: [], files_read: [], files_modified: [] });
 
     const pendingResults = new Map<number, PendingResult<ParsedObservation | ParsedSummary | null>>();
     const promise = new Promise<ParsedObservation | ParsedSummary | null>((resolve) => {

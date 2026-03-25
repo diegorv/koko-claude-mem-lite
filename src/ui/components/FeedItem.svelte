@@ -45,6 +45,7 @@
   }
 
   let facts = $derived(parseJson(item.facts));
+  let concepts = $derived(parseJson(item.concepts));
   let filesRead = $derived(parseJson(item.files_read));
   let filesModified = $derived(parseJson(item.files_modified));
 </script>
@@ -82,6 +83,9 @@
   {#if item.item_type === 'observation'}
     {#if item.title}
       <div class="title">{item.title}</div>
+    {/if}
+    {#if item.subtitle}
+      <div class="subtitle">{item.subtitle}</div>
     {/if}
 
     {#if item.narrative || facts.length > 0}
@@ -130,6 +134,14 @@
             <span class="file-tag">+{filesRead.length - 5}</span>
           {/if}
         </div>
+      </div>
+    {/if}
+
+    {#if concepts.length > 0}
+      <div class="concepts">
+        {#each concepts as concept}
+          <span class="concept-tag">{concept}</span>
+        {/each}
       </div>
     {/if}
 

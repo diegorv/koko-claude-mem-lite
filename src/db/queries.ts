@@ -66,8 +66,10 @@ export interface Observation {
   project: string;
   type: string;
   title: string | null;
+  subtitle: string | null;
   facts: string | null;
   narrative: string | null;
+  concepts: string | null;
   files_read: string | null;
   files_modified: string | null;
   content_hash: string | null;
@@ -78,8 +80,10 @@ export interface Observation {
 export interface ObservationInput {
   type: string;
   title: string | null;
+  subtitle: string | null;
   facts: string[];
   narrative: string | null;
+  concepts: string[];
   files_read: string[];
   files_modified: string[];
 }
@@ -106,13 +110,15 @@ export function storeObservation(
   }
 
   const result = db.prepare(
-    `INSERT INTO observations (session_id, project, type, title, facts, narrative, files_read, files_modified, content_hash, created_at, created_at_epoch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO observations (session_id, project, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, content_hash, created_at, created_at_epoch)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId, project, obs.type,
     obs.title,
+    obs.subtitle ?? null,
     JSON.stringify(obs.facts),
     obs.narrative,
+    obs.concepts.length > 0 ? JSON.stringify(obs.concepts) : null,
     JSON.stringify(obs.files_read),
     JSON.stringify(obs.files_modified),
     contentHash, iso, now

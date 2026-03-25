@@ -10,8 +10,10 @@ import { logger } from '../utils/logger.js';
 export interface ParsedObservation {
   type: string;
   title: string | null;
+  subtitle: string | null;
   facts: string[];
   narrative: string | null;
+  concepts: string[];
   files_read: string[];
   files_modified: string[];
 }
@@ -67,8 +69,10 @@ export function parseObservationXml(text: string): ParsedObservation | null {
   return {
     type,
     title: extractField(content, 'title'),
+    subtitle: extractField(content, 'subtitle'),
     facts: extractArray(content, 'facts', 'fact'),
     narrative: extractField(content, 'narrative'),
+    concepts: extractArray(content, 'concepts', 'concept'),
     files_read: extractArray(content, 'files_read', 'file'),
     files_modified: extractArray(content, 'files_modified', 'file'),
   };

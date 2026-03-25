@@ -17,8 +17,8 @@ import { cleanupRoutes } from '../../../src/worker/routes/cleanup.js';
 import { createSession, storeObservation, storeSummary, type ObservationInput } from '../../../src/db/queries.js';
 
 const obsInput: ObservationInput = {
-  type: 'feature', title: 'Test', facts: [], narrative: 'n',
-  files_read: [], files_modified: [],
+  type: 'feature', title: 'Test', subtitle: null, facts: [], narrative: 'n',
+  concepts: [], files_read: [], files_modified: [],
 };
 
 beforeEach(() => {

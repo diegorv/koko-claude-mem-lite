@@ -94,8 +94,10 @@ describe('sessions', () => {
 const obsInput: ObservationInput = {
   type: 'feature',
   title: 'Added auth',
+  subtitle: null,
   facts: ['Implemented login flow'],
   narrative: 'Full login flow added.',
+  concepts: [],
   files_read: ['src/auth.ts'],
   files_modified: ['src/routes/login.ts'],
 };
