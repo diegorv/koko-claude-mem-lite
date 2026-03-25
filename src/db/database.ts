@@ -141,20 +141,25 @@ function initializeSchema(database: Database.Database): void {
   }
 
   if (currentVersion < 1) {
-    // Fresh install: run full schema
+    // Fresh install: run full schema and record version
     database.exec(SCHEMA_SQL);
+    database.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
     currentVersion = SCHEMA_VERSION;
   }
 
-  // Run incremental migrations
-  for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
-    const migrate = MIGRATIONS[v];
-    if (migrate) {
-      migrate(database);
-    }
+  // Run incremental migrations inside a transaction so partial failures
+  // don't bump schema_version and leave the DB in a corrupt state.
+  if (currentVersion < SCHEMA_VERSION) {
+    database.transaction(() => {
+      for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
+        const migrate = MIGRATIONS[v];
+        if (migrate) {
+          migrate(database);
+        }
+      }
+      database.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
+    })();
   }
-
-  database.prepare('INSERT OR REPLACE INTO schema_version (version) VALUES (?)').run(SCHEMA_VERSION);
 }
 
 function tryLoadSqliteVec(database: Database.Database): void {
