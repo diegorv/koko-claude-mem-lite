@@ -17,21 +17,27 @@ import { homedir } from 'os';
 
 const WORKER_BASE = `http://127.0.0.1:${getSetting('WORKER_PORT')}`;
 
-async function workerFetch(path: string, options?: RequestInit): Promise<Response | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000); // 10s timeout
-    const res = await fetch(`${WORKER_BASE}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...options?.headers },
-    });
-    clearTimeout(timeout);
-    return res;
-  } catch {
-    // Worker unavailable or timeout — graceful degradation
-    return null;
+async function workerFetch(path: string, options?: RequestInit, retries = 2): Promise<Response | null> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      const res = await fetch(`${WORKER_BASE}${path}`, {
+        ...options,
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+      });
+      clearTimeout(timeout);
+      if (res.ok || res.status < 500) return res;
+      // Server error — retry
+    } catch {
+      // Network error or timeout — retry
+    }
+    if (attempt < retries) {
+      await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+    }
   }
+  return null;
 }
 
 async function waitForHealth(timeoutMs: number): Promise<boolean> {
@@ -88,18 +94,31 @@ async function handleStart(): Promise<void> {
     return;
   }
 
-  // Anti-spawn-storm: if PID file is recent, another session is already spawning
+  // Anti-spawn-storm: if PID file is recent and process alive, wait for existing spawn
   const pidPath = join(homedir(), '.memory-lite', 'worker.pid');
   try {
     if (existsSync(pidPath)) {
       const ageMs = Date.now() - statSync(pidPath).mtimeMs;
       if (ageMs < 15_000) {
-        console.error('[memory-lite] PID file is recent (<15s), waiting for existing spawn...');
-        if (await waitForReadiness(15_000)) {
-          console.log(JSON.stringify(formatSilentOutput()));
-          return;
+        // Verify the process is actually alive before waiting
+        let processAlive = false;
+        try {
+          const raw = readFileSync(pidPath, 'utf-8').trim();
+          const info = JSON.parse(raw);
+          process.kill(info.pid, 0); // throws if process doesn't exist
+          processAlive = true;
+        } catch { /* process dead or PID file unreadable */ }
+
+        if (processAlive) {
+          console.error('[memory-lite] PID file is recent and process alive, waiting for existing spawn...');
+          if (await waitForReadiness(15_000)) {
+            console.log(JSON.stringify(formatSilentOutput()));
+            return;
+          }
+          console.error('[memory-lite] Existing spawn seems to have failed, attempting new spawn');
+        } else {
+          console.error('[memory-lite] PID file is recent but process dead, spawning new worker');
         }
-        console.error('[memory-lite] Existing spawn seems to have failed, attempting new spawn');
       }
     }
   } catch { /* ignore PID file read errors */ }
@@ -310,5 +329,5 @@ main()
   .then(() => process.exit(0))
   .catch((err) => {
     console.error('[hook] Fatal error:', err);
-    process.exit(0); // Always exit 0 for graceful degradation
+    process.exit(1);
   });
