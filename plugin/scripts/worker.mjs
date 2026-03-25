@@ -3873,7 +3873,8 @@ var DEFAULTS = {
   SUMMARY_COUNT: 2,
   OLLAMA_URL: "http://localhost:11434",
   OLLAMA_MODEL: "bge-m3",
-  SKIP_TOOLS: "Read,Glob,Grep,LSP"
+  SKIP_TOOLS: "Read,Glob,Grep,LSP",
+  EXCLUDED_PROJECTS: ""
 };
 var cached = null;
 function getSettings() {
@@ -4723,6 +4724,13 @@ searchRoutes.get("/search", async (c) => {
   }
 });
 
+// src/utils/tokens.ts
+function estimateTokens2(text) {
+  if (!text) return 0;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.ceil(words * 1.3);
+}
+
 // src/context/generator.ts
 function generateContextDetailed(project) {
   const observationCount = getSetting("OBSERVATION_COUNT");
@@ -4734,7 +4742,7 @@ function generateContextDetailed(project) {
   const context = generateContext(project);
   return {
     context,
-    estimatedTokens: Math.ceil(context.length / 4),
+    estimatedTokens: estimateTokens2(context),
     summaries,
     observations,
     detailedIds

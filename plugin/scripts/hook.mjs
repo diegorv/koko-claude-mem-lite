@@ -131,13 +131,6 @@ function getProjectName(cwd) {
   return cwd.split("/").pop() || "unknown";
 }
 
-// src/hooks/worker-spawn.ts
-import { spawn, execSync } from "child_process";
-import { existsSync as existsSync3, readFileSync as readFileSync2, statSync } from "fs";
-import { join as join2, dirname } from "path";
-import { fileURLToPath } from "url";
-import { homedir as homedir2 } from "os";
-
 // src/utils/settings.ts
 import { existsSync as existsSync2, readFileSync, writeFileSync } from "fs";
 var DEFAULTS = {
@@ -147,7 +140,8 @@ var DEFAULTS = {
   SUMMARY_COUNT: 2,
   OLLAMA_URL: "http://localhost:11434",
   OLLAMA_MODEL: "bge-m3",
-  SKIP_TOOLS: "Read,Glob,Grep,LSP"
+  SKIP_TOOLS: "Read,Glob,Grep,LSP",
+  EXCLUDED_PROJECTS: ""
 };
 var cached = null;
 function getSettings() {
@@ -180,8 +174,26 @@ function getSetting(key) {
   }
   return getSettings()[key];
 }
+function isProjectExcluded(project) {
+  const raw = getSetting("EXCLUDED_PROJECTS").trim();
+  if (!raw) return false;
+  const patterns = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  for (const pattern of patterns) {
+    if (matchesPattern(pattern, project)) return true;
+  }
+  return false;
+}
+function matchesPattern(pattern, value) {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i").test(value);
+}
 
 // src/hooks/worker-spawn.ts
+import { spawn, execSync } from "child_process";
+import { existsSync as existsSync3, readFileSync as readFileSync2, statSync } from "fs";
+import { join as join2, dirname } from "path";
+import { fileURLToPath } from "url";
+import { homedir as homedir2 } from "os";
 var WORKER_BASE = `http://127.0.0.1:${getSetting("WORKER_PORT")}`;
 async function workerFetch(path, options, retries = 2, timeoutMs = 1e4) {
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -309,6 +321,10 @@ async function spawnWorker() {
 // src/hooks/hook.ts
 async function handleContext(input) {
   const project = getProjectName(input.cwd);
+  if (isProjectExcluded(project)) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
   const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
   if (!res || !res.ok) {
     console.log(JSON.stringify(formatSilentOutput()));
@@ -327,6 +343,10 @@ async function handleSessionInit(input) {
     return;
   }
   const project = getProjectName(input.cwd);
+  if (isProjectExcluded(project)) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
   const prompt = input.prompt ? stripPrivateTags(input.prompt) : void 0;
   await workerFetch("/api/sessions", {
     method: "POST",
@@ -358,6 +378,11 @@ async function handleObservation(input) {
     return;
   }
   if (IGNORED_TOOLS.has(input.toolName)) {
+    console.log(JSON.stringify(formatSilentOutput()));
+    return;
+  }
+  const project = getProjectName(input.cwd);
+  if (isProjectExcluded(project)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
