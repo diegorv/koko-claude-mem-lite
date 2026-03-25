@@ -64,6 +64,34 @@ Runs on ANY session start (startup, resume, clear, compact). Three hooks in orde
 - Serves both the API and the static UI from `plugin/ui/`
 - Uses `better-sqlite3` + `sqlite-vec` for storage and vector search
 
+## SDK Observer (claude-agent-sdk)
+
+O `ObserverSession` usa `query()` do `@anthropic-ai/claude-agent-sdk` para processar mensagens.
+
+### Armadilhas críticas
+
+- **`query()` exige `SDKUserMessage`, não strings puras** — passar strings no generator faz o SDK
+  falhar silenciosamente (0 mensagens processadas, sem erro). Sempre usar:
+  `{ type: 'user', message: { role: 'user', content }, session_id, parent_tool_use_id: null, isSynthetic: true }`
+
+- **System prompt vai no corpo do primeiro prompt**, não na opção `systemPrompt` — o SDK ignora
+  `systemPrompt` nesse modo de uso.
+
+- **`pathToClaudeCodeExecutable` + `cwd` são obrigatórios** — o worker roda como processo detached
+  e o SDK não acha o binário do Claude sem eles.
+
+- **`disallowedTools: ['*']` não funciona** — usar lista explícita de ferramentas proibidas.
+
+- **Nunca retomar sessão com `memorySessionId` do DB após restart do worker** — o contexto do SDK
+  é perdido no restart. Sempre iniciar fresh; o SDK captura um novo ID na primeira resposta.
+  (Issue #817 do claude-mem)
+
+- **Capturar `session_id` de qualquer mensagem**, não só da primeira — o SDK pode atualizar
+  o ID no meio da conversa.
+
+- **Extended thinking**: o `content` pode ter blocos `thinking` — filtrar `type === 'text'`
+  antes de extrair texto.
+
 ## Common Gotchas
 
 1. **"Worker not starting"** — Most likely `node_modules` missing in the cache dir. Check with `ls ~/.claude/plugins/cache/memory-lite-plugin/memory-lite/*/node_modules/`
