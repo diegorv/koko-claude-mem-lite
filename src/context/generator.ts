@@ -1,5 +1,6 @@
 import { getRecentObservations, getRecentSummaries, type Observation, type Summary } from '../db/queries.js';
 import { getSetting } from '../utils/settings.js';
+import { estimateTokens } from '../utils/tokens.js';
 
 export interface ContextBreakdown {
   context: string;
@@ -21,7 +22,7 @@ export function generateContextDetailed(project: string): ContextBreakdown {
 
   return {
     context,
-    estimatedTokens: Math.ceil(context.length / 4),
+    estimatedTokens: estimateTokens(context),
     summaries,
     observations,
     detailedIds,
