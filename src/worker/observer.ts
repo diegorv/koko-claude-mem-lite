@@ -13,10 +13,13 @@ import { parseObservationXml, parseSummaryXml, type ParsedObservation, type Pars
 import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt } from './prompts.js';
 import { DurableQueue, type PendingMessage } from './durable-queue.js';
 import { deletePending, getPendingCount, forceUnstickAll } from '../db/pending-store.js';
-import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
+import { setMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
 import { embedObservation } from '../embeddings/embeddings.js';
 import { getDb } from '../db/database.js';
 import { logger } from '../utils/logger.js';
+
+// Re-export registry functions so existing imports from './observer.js' still work
+export { getOrCreateObserver, getObserver, destroyObserver, destroyAllObservers, getActiveSessionIds, getSessionAge } from './observer-registry.js';
 
 // --- SDK environment helpers ---
 
@@ -56,6 +59,8 @@ interface PendingResult<T> {
   resolve: (value: T) => void;
 }
 
+export type RegisterObserverFn = (contentSessionId: string, session: ObserverSession) => void;
+
 // --- ObserverSession ---
 
 export class ObserverSession {
@@ -66,16 +71,25 @@ export class ObserverSession {
   private abortController = new AbortController();
   private restartCount: number;
   private conversation: Query | null = null;
+  private onReplace: RegisterObserverFn;
   lastActivityTime: number = Date.now();
 
   readonly contentSessionId: string;
   readonly project: string;
 
-  constructor(contentSessionId: string, project: string, userPrompt?: string, memorySessionId?: string | null, restartCount: number = 0) {
+  constructor(
+    contentSessionId: string,
+    project: string,
+    userPrompt?: string,
+    memorySessionId?: string | null,
+    restartCount: number = 0,
+    onReplace?: RegisterObserverFn,
+  ) {
     this.contentSessionId = contentSessionId;
     this.project = project;
     this.memorySessionId = memorySessionId || null;
     this.restartCount = restartCount;
+    this.onReplace = onReplace || (() => {});
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
 
     // Unstick any orphaned processing messages from previous runs
@@ -142,8 +156,6 @@ export class ObserverSession {
   }
 
   private async runConversation(project: string, userPrompt?: string): Promise<void> {
-    // FIFO queue: SDK may pull multiple messages from the generator before responding.
-    // Each assistant response is matched to the oldest unresolved message.
     const processingMsgs: PendingMessage[] = [];
     const isResume = !!this.memorySessionId;
 
@@ -158,12 +170,9 @@ export class ObserverSession {
       });
 
       const messageGenerator = async function* () {
-        // First message: init prompt with system prompt embedded (only if not resuming)
         if (!isResume) {
           yield toSDKMessage(buildInitPrompt(project, userPrompt));
         }
-
-        // Messages from durable queue
         for await (const msg of self.queue) {
           processingMsgs.push(msg);
           yield toSDKMessage(msg.prompt);
@@ -197,7 +206,6 @@ export class ObserverSession {
 
       this.conversation = conversation;
 
-      // Idle timeout: if no SDK messages for 5 min, force-close
       const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
       let lastMessageTime = Date.now();
       let sdkMessageCount = 0;
@@ -221,8 +229,6 @@ export class ObserverSession {
           lastMessageTime = Date.now();
           logger.info('observer', `SDK message #${sdkMessageCount} type=${message.type} for ${this.contentSessionId}`);
 
-          // Capture or update memory session ID from ANY message (like claude-mem)
-          // The SDK may return a different session_id on resume
           if ((message as any).session_id && (message as any).session_id !== this.memorySessionId) {
             const prev = this.memorySessionId;
             this.memorySessionId = (message as any).session_id;
@@ -230,7 +236,6 @@ export class ObserverSession {
             logger.info('observer', `${prev ? 'Updated' : 'Captured'} memorySessionId for ${this.contentSessionId}`);
           }
 
-          // Handle assistant messages (extract text exactly like claude-mem)
           if (message.type === 'assistant') {
             const content = (message as any).message?.content;
             const text = Array.isArray(content)
@@ -247,7 +252,6 @@ export class ObserverSession {
             }
           }
 
-          // Log result messages
           if (message.type === 'result') {
             logger.info('observer', `Result for ${this.contentSessionId}: subtype=${(message as any).subtype}`);
           }
@@ -263,7 +267,6 @@ export class ObserverSession {
     } catch (error) {
       logger.error('observer', `Conversation error for ${this.contentSessionId}`, error);
     } finally {
-      // Resolve any messages the SDK never responded to
       if (processingMsgs.length > 0) {
         logger.info('observer', `Resolving ${processingMsgs.length} leftover pending msgs with empty text`);
         for (const leftover of processingMsgs) {
@@ -272,13 +275,11 @@ export class ObserverSession {
         processingMsgs.length = 0;
       }
 
-      // Auto-restart if pending messages remain
       const remainingCount = getPendingCount(this.contentSessionId);
       logger.info('observer', `Conversation ended for ${this.contentSessionId} (remaining=${remainingCount}, restarts=${this.restartCount}/${MAX_RESTARTS}, destroyed=${this.destroyed})`);
       if (remainingCount > 0 && this.restartCount < MAX_RESTARTS) {
         logger.info('observer', `${remainingCount} pending messages remain, restarting (${this.restartCount + 1}/${MAX_RESTARTS})`);
 
-        // Tear down old session FIRST to prevent zombie SDK subprocesses
         this.destroyed = true;
         this.abortController.abort();
         this.queue.close();
@@ -293,12 +294,12 @@ export class ObserverSession {
 
         forceUnstickAll(this.contentSessionId);
 
-        // Create replacement after old subprocess is cleaned up
         const replacement = new ObserverSession(
           this.contentSessionId, this.project, undefined,
           this.memorySessionId, this.restartCount + 1,
+          this.onReplace,
         );
-        activeSessions.set(this.contentSessionId, replacement);
+        this.onReplace(this.contentSessionId, replacement);
       } else {
         if (remainingCount > 0) {
           logger.warn('observer', `${remainingCount} pending messages remain but max restarts (${MAX_RESTARTS}) exceeded`);
@@ -316,7 +317,6 @@ export class ObserverSession {
         if (session) {
           try {
             const result = storeObservation(session.id, session.project, parsed, this.contentSessionId);
-            // Delete from durable store only AFTER successful storage
             deletePending(msg.id);
             if (!result.deduplicated) {
               embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts)
@@ -324,7 +324,6 @@ export class ObserverSession {
             }
           } catch (err) {
             logger.error('observer', 'Failed to store observation', err);
-            // Don't delete pending — will be retried on next restart
             return;
           }
         } else {
@@ -333,7 +332,6 @@ export class ObserverSession {
       } else {
         deletePending(msg.id);
       }
-      // Resolve pending promise (for any callers still awaiting)
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
         this.pendingResults.delete(msg.id);
@@ -346,11 +344,9 @@ export class ObserverSession {
         if (session) {
           try {
             storeSummary(session.id, session.project, parsed);
-            // Delete from durable store only AFTER successful storage
             deletePending(msg.id);
           } catch (err) {
             logger.error('observer', 'Failed to store summary', err);
-            // Don't delete pending — will be retried on next restart
             return;
           }
         } else {
@@ -365,7 +361,6 @@ export class ObserverSession {
         pending.resolve(parsed ?? null);
       }
     } else {
-      // Empty text — nothing to store, safe to delete
       deletePending(msg.id);
       const pending = this.pendingResults.get(msg.id);
       if (pending) {
@@ -374,81 +369,4 @@ export class ObserverSession {
       }
     }
   }
-}
-
-// --- Session Manager ---
-
-const activeSessions = new Map<string, ObserverSession>();
-const creatingSessions = new Set<string>();
-
-export function getOrCreateObserver(contentSessionId: string, project: string, userPrompt?: string): ObserverSession {
-  let session = activeSessions.get(contentSessionId);
-  if (session && !session.isDestroyed()) return session;
-
-  // Guard against duplicate creation from concurrent calls
-  if (creatingSessions.has(contentSessionId)) {
-    session = activeSessions.get(contentSessionId);
-    if (session && !session.isDestroyed()) return session;
-  }
-  creatingSessions.add(contentSessionId);
-
-  // CRITICAL (Issue #817 from claude-mem): Never resume with stale memorySessionId.
-  // When creating a new in-memory session, any DB memorySessionId is STALE because
-  // the SDK context was lost when the worker restarted. Always start fresh —
-  // the SDK will capture a new memorySessionId on the first response.
-  const staleMemorySessionId = getMemorySessionId(contentSessionId);
-  if (staleMemorySessionId) {
-    logger.warn('observer', `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
-  }
-
-  // Clean up any orphaned pending messages from previous runs
-  const hasPending = getPendingCount(contentSessionId) > 0;
-  if (hasPending) {
-    const unstuck = forceUnstickAll(contentSessionId);
-    if (unstuck > 0) logger.info('observer', `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
-  }
-
-  try {
-    session = new ObserverSession(contentSessionId, project, userPrompt, null);
-    activeSessions.set(contentSessionId, session);
-    logger.info('observer', `Created session for ${contentSessionId} (project: ${project})`);
-    return session;
-  } finally {
-    creatingSessions.delete(contentSessionId);
-  }
-}
-
-export function getObserver(contentSessionId: string): ObserverSession | undefined {
-  const session = activeSessions.get(contentSessionId);
-  if (session?.isDestroyed()) {
-    activeSessions.delete(contentSessionId);
-    return undefined;
-  }
-  return session;
-}
-
-export function destroyObserver(contentSessionId: string): void {
-  const session = activeSessions.get(contentSessionId);
-  if (session) {
-    session.destroy();
-    activeSessions.delete(contentSessionId);
-    logger.info('observer', `Destroyed session for ${contentSessionId}`);
-  }
-}
-
-export function destroyAllObservers(): void {
-  for (const [, session] of activeSessions) {
-    session.destroy();
-  }
-  activeSessions.clear();
-}
-
-export function getActiveSessionIds(): string[] {
-  return Array.from(activeSessions.keys());
-}
-
-export function getSessionAge(contentSessionId: string): number {
-  const session = activeSessions.get(contentSessionId);
-  if (!session) return Infinity;
-  return Date.now() - session.lastActivityTime;
 }
