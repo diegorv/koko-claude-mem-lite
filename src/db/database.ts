@@ -14,7 +14,7 @@ export function isDbReady(): boolean {
 
 const SCHEMA_VERSION = 3;
 
-const SCHEMA_SQL = `
+export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS schema_version (
   version INTEGER PRIMARY KEY
 );

@@ -129,7 +129,7 @@ export function formatObservationsFull(observations: Observation[]): string {
   return lines.join('\n');
 }
 
-function parseJsonArray(json: string | null): string[] {
+export function parseJsonArray(json: string | null): string[] {
   if (!json) return [];
   try {
     const arr = JSON.parse(json);

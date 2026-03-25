@@ -9,7 +9,10 @@
     "build:ui": "vite build",
     "dev:ui": "vite",
     "worker:start": "node plugin/scripts/worker.mjs",
-    "worker:stop": "kill $(cat ~/.memory-lite/worker.pid) 2>/dev/null || true"
+    "worker:stop": "kill $(cat ~/.memory-lite/worker.pid) 2>/dev/null || true",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.81",
@@ -23,10 +26,12 @@
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.19.37",
+    "@vitest/coverage-v8": "^4.1.1",
     "esbuild": "^0.27.4",
     "svelte": "^5.55.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vite": "^8.0.2"
+    "vite": "^8.0.2",
+    "vitest": "^4.1.1"
   }
 }
