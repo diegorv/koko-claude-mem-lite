@@ -4,7 +4,6 @@
  * The SDK's session ID is stored so the conversation can be resumed.
  */
 
-import { EventEmitter } from 'events';
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -12,7 +11,8 @@ import { homedir } from 'os';
 import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
 import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt } from './prompts.js';
-import { enqueuePending, claimNextPending, deletePending, getPendingCount, forceUnstickAll, type PendingMessage } from '../db/pending-store.js';
+import { DurableQueue, type PendingMessage } from './durable-queue.js';
+import { deletePending, getPendingCount, forceUnstickAll } from '../db/pending-store.js';
 import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
 import { embedObservation } from '../embeddings/embeddings.js';
 import { getDb } from '../db/database.js';
@@ -48,95 +48,7 @@ function findClaudeExecutable(): string {
   return 'claude';
 }
 
-// --- DurableQueue: SQLite-backed async iterator ---
-
-const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 const MAX_RESTARTS = 3;
-
-class DurableQueue {
-  private emitter = new EventEmitter();
-  private closed = false;
-  private contentSessionId: string;
-  private signal?: AbortSignal;
-
-  constructor(contentSessionId: string, signal?: AbortSignal) {
-    this.contentSessionId = contentSessionId;
-    this.signal = signal;
-  }
-
-  push(kind: 'observation' | 'summary', prompt: string): number {
-    const id = enqueuePending(this.contentSessionId, kind, prompt);
-    this.emitter.emit('message');
-    return id;
-  }
-
-  close(): void {
-    this.closed = true;
-    this.emitter.emit('message'); // wake any waiting iterator
-  }
-
-  async *[Symbol.asyncIterator](): AsyncGenerator<PendingMessage> {
-    let iterCount = 0;
-    while (!this.closed && !this.signal?.aborted) {
-      iterCount++;
-      let msg: PendingMessage | null = null;
-      try {
-        msg = claimNextPending(this.contentSessionId);
-      } catch (err) {
-        logger.error('queue', `Error claiming message (iter=${iterCount}), backing off`, err);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        continue;
-      }
-
-      if (msg) {
-        logger.info('queue', `Claimed message id=${msg.id} kind=${msg.kind} (iter=${iterCount}) for ${this.contentSessionId}`);
-        yield msg;
-        continue;
-      }
-
-      logger.info('queue', `No pending messages, waiting (iter=${iterCount}) for ${this.contentSessionId}`);
-      // Wait for new message or timeout
-      const gotMessage = await new Promise<boolean>((resolve) => {
-        const onMessage = () => {
-          clearTimeout(timer);
-          this.signal?.removeEventListener('abort', onAbort);
-          resolve(true);
-        };
-        const onAbort = () => {
-          clearTimeout(timer);
-          this.emitter.removeListener('message', onMessage);
-          resolve(false);
-        };
-        const timer = setTimeout(() => {
-          this.emitter.removeListener('message', onMessage);
-          this.signal?.removeEventListener('abort', onAbort);
-          resolve(false);
-        }, IDLE_TIMEOUT_MS);
-
-        this.emitter.once('message', onMessage);
-        this.signal?.addEventListener('abort', onAbort, { once: true });
-      });
-
-      if (!gotMessage) {
-        if (this.signal?.aborted) {
-          logger.info('queue', `Aborted signal received (iter=${iterCount}) for ${this.contentSessionId}`);
-          break;
-        }
-        // Final check: stuck messages may now be past STUCK_TIMEOUT_MS
-        logger.info('queue', `Idle timeout, final check (iter=${iterCount}) for ${this.contentSessionId}`);
-        const recovered = claimNextPending(this.contentSessionId);
-        if (recovered) {
-          logger.info('queue', `Recovered stuck message id=${recovered.id} (iter=${iterCount})`);
-          yield recovered;
-          continue;
-        }
-        logger.info('queue', `No stuck messages, exiting iterator for ${this.contentSessionId}`);
-        break;
-      }
-    }
-    logger.info('queue', `Iterator exited (iter=${iterCount}, closed=${this.closed}, aborted=${this.signal?.aborted}) for ${this.contentSessionId}`);
-  }
-}
 
 // --- Pending result tracking ---
 
