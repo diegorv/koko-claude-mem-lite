@@ -2944,8 +2944,10 @@ CREATE TABLE IF NOT EXISTS observations (
   project TEXT NOT NULL,
   type TEXT NOT NULL,
   title TEXT,
+  subtitle TEXT,
   facts TEXT,
   narrative TEXT,
+  concepts TEXT,
   files_read TEXT,
   files_modified TEXT,
   content_hash TEXT,
@@ -3039,15 +3041,20 @@ function initializeSchema(database) {
   }
   if (currentVersion < 1) {
     database.exec(SCHEMA_SQL);
+    database.prepare("INSERT OR REPLACE INTO schema_version (version) VALUES (?)").run(SCHEMA_VERSION);
     currentVersion = SCHEMA_VERSION;
   }
-  for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
-    const migrate = MIGRATIONS[v];
-    if (migrate) {
-      migrate(database);
-    }
+  if (currentVersion < SCHEMA_VERSION) {
+    database.transaction(() => {
+      for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
+        const migrate = MIGRATIONS[v];
+        if (migrate) {
+          migrate(database);
+        }
+      }
+      database.prepare("INSERT OR REPLACE INTO schema_version (version) VALUES (?)").run(SCHEMA_VERSION);
+    })();
   }
-  database.prepare("INSERT OR REPLACE INTO schema_version (version) VALUES (?)").run(SCHEMA_VERSION);
 }
 function tryLoadSqliteVec(database) {
   try {
@@ -3134,15 +3141,17 @@ function storeObservation(sessionId, project, obs, contentSessionId) {
     return { id: existing.id, deduplicated: true };
   }
   const result = db2.prepare(
-    `INSERT INTO observations (session_id, project, type, title, facts, narrative, files_read, files_modified, content_hash, created_at, created_at_epoch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO observations (session_id, project, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, content_hash, created_at, created_at_epoch)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId,
     project,
     obs.type,
     obs.title,
+    obs.subtitle ?? null,
     JSON.stringify(obs.facts),
     obs.narrative,
+    obs.concepts.length > 0 ? JSON.stringify(obs.concepts) : null,
     JSON.stringify(obs.files_read),
     JSON.stringify(obs.files_modified),
     contentHash,
@@ -3326,8 +3335,10 @@ function parseObservationXml(text) {
   return {
     type,
     title: extractField(content, "title"),
+    subtitle: extractField(content, "subtitle"),
     facts: extractArray(content, "facts", "fact"),
     narrative: extractField(content, "narrative"),
+    concepts: extractArray(content, "concepts", "concept"),
     files_read: extractArray(content, "files_read", "file"),
     files_modified: extractArray(content, "files_modified", "file")
   };
@@ -3355,6 +3366,13 @@ You do not have access to tools. All information you need is provided in <observ
 
 Your job is to monitor a different Claude Code session happening RIGHT NOW, with the goal of creating observations and progress summaries as the work is being done LIVE by the user. You are NOT the one doing the work \u2014 you are ONLY observing and recording.
 
+SPATIAL AWARENESS
+-----------------
+Tool executions include <working_directory> to help you understand:
+- Which repository/project is being worked on
+- Where files are located relative to the project root
+- How to map requested paths to actual execution paths
+
 WHAT TO RECORD
 --------------
 Focus on deliverables and capabilities:
@@ -3367,10 +3385,10 @@ Focus on deliverables and capabilities:
 
 Use verbs like: implemented, fixed, deployed, configured, migrated, optimized, added, refactored
 
-GOOD: "Authentication now supports OAuth2 with PKCE flow"
-GOOD: "Worker crashes because sqlite-vec isn't loaded before query \u2014 fixed by moving loadExtension to init"
-BAD: "Analyzed authentication implementation and stored findings"
-BAD: "File X was read" / "Function Y was added"
+\u2705 GOOD: "Authentication now supports OAuth2 with PKCE flow"
+\u2705 GOOD: "Worker crashes because sqlite-vec isn't loaded before query \u2014 fixed by moving loadExtension to init"
+\u274C BAD: "Analyzed authentication implementation and stored findings"
+\u274C BAD: "File X was read" / "Function Y was added"
 
 WHEN TO SKIP
 ------------
@@ -3393,17 +3411,31 @@ OBSERVATION TYPES (use exactly one):
 - decision: architectural/design choice with rationale
 - change: generic modification (docs, config, misc)
 
+CONCEPTS (use 1-3 that apply):
+- how-it-works: understanding mechanisms
+- why-it-exists: purpose or rationale
+- what-changed: modifications made
+- problem-solution: issues and their fixes
+- gotcha: traps or edge cases
+- pattern: reusable approach
+- trade-off: pros/cons of a decision
+
 OUTPUT FORMAT
 -------------
 \`\`\`xml
 <observation>
   <type>bugfix | feature | refactor | discovery | decision | change</type>
-  <title>Short title capturing the core action (5-10 words)</title>
+  <title>Short title capturing the core action or topic (5-10 words)</title>
+  <subtitle>One sentence explanation providing context (max 24 words)</subtitle>
   <facts>
-    <fact>Concise self-contained statement with specifics (filenames, values)</fact>
-    <fact>Another specific fact</fact>
+    <fact>Concise self-contained statement \u2014 no pronouns, include specifics (filenames, values, function names)</fact>
+    <fact>Another specific fact that stands alone</fact>
   </facts>
-  <narrative>What was done, how it works, why it matters (2-3 sentences)</narrative>
+  <narrative>Full context: what was done, how it works, why it matters (2-3 sentences)</narrative>
+  <concepts>
+    <concept>gotcha</concept>
+    <concept>problem-solution</concept>
+  </concepts>
   <files_read>
     <file>path/to/file</file>
   </files_read>
@@ -3415,6 +3447,8 @@ OUTPUT FORMAT
 
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
 var OBSERVATION_EXTRACTION_PROMPT = `You observe a Claude Code session and extract structured observations for FUTURE sessions.
+
+SPATIAL AWARENESS: Tool executions include the working directory. Use it to understand which project is being worked on and where files live.
 
 WHAT TO RECORD \u2014 only knowledge you can't re-derive from code or git:
 - Bugs found with root cause ("X broke because Y, fixed by Z")
@@ -3431,7 +3465,6 @@ WHEN TO SKIP \u2014 the vast majority of tool uses should be skipped. Skip if:
 - "X was added/created/updated/modified/implemented" \u2014 the code is the source of truth
 - Package installs with no errors or surprising behavior
 - Describing what a file or module does (the code itself is the documentation)
-- Comparing two projects/codebases (the comparison is ephemeral context)
 - Plan creation, task tracking, or meta-tooling operations
 - Anything where the title alone tells you everything \u2014 no deeper insight needed
 If skipping, output ONLY: <observation><type>skip</type></observation>
@@ -3439,19 +3472,27 @@ If skipping, output ONLY: <observation><type>skip</type></observation>
 TYPES:
 - bugfix: something was broken, now fixed (must include root cause)
 - feature: new capability added (only if non-trivial, with design rationale)
+- refactor: code restructured, behavior unchanged (only if non-obvious rationale)
 - discovery: non-obvious insight about existing system behavior
 - decision: architectural/design choice with rationale
 - change: significant config or integration change (not routine edits)
 
+CONCEPTS (use 1-3 that apply):
+- how-it-works | why-it-exists | what-changed | problem-solution | gotcha | pattern | trade-off
+
 FORMAT:
 \`\`\`xml
 <observation>
-  <type>bugfix | feature | discovery | decision | change</type>
+  <type>bugfix | feature | refactor | discovery | decision | change</type>
   <title>Capture the INSIGHT, not the action (5-10 words)</title>
+  <subtitle>One sentence providing context (max 24 words)</subtitle>
   <facts>
-    <fact>Concise self-contained statement with specifics (filenames, values, behaviors)</fact>
+    <fact>Concise self-contained statement \u2014 no pronouns, include specifics (filenames, values, behaviors)</fact>
   </facts>
-  <narrative>Why this matters for future sessions (1-2 sentences max)</narrative>
+  <narrative>What was done, how it works, why it matters for future sessions (2-3 sentences)</narrative>
+  <concepts>
+    <concept>gotcha</concept>
+  </concepts>
   <files_modified>
     <file>path/to/file</file>
   </files_modified>
@@ -3469,7 +3510,7 @@ CRITICAL RULES:
 - When in doubt, SKIP. A small number of high-signal observations beats many low-signal ones.
 - Record what was LEARNED, not what was DONE \u2014 the git log records actions.
 - Title must contain the insight itself, not just name the topic.
-- Narrative should explain WHY this matters, not describe the change.
+- Each fact must stand alone \u2014 no pronouns, no "it" or "this", include specific names/values.
 - Skip files_read \u2014 only include files_modified (files read are in git blame).
 - Output ONLY the XML block, nothing else.`;
 var SUMMARY_SYSTEM_PROMPT = `You are a development session summarizer. Given the last assistant message from a coding session, produce a structured summary for FUTURE sessions.
@@ -3499,7 +3540,6 @@ DELETE (the vast majority of items should be deleted):
 - "Task/plan created/updated/completed" \u2014 meta-tooling noise
 - "Tool search performed", "Dependencies found", "File structure explored" \u2014 discovery that leads nowhere specific
 - "Plugin installed/uninstalled", "Worker started/restarted" \u2014 operational noise
-- Self-referential observations about the memory plugin itself being developed (unless they contain a real gotcha)
 - Summaries of sessions where nothing meaningful was accomplished
 - Anything where the title alone tells you everything and there's no deeper insight
 - "X function/component/route was implemented" \u2014 the code exists, no need to remember it was created
@@ -3823,7 +3863,11 @@ function getSetting(key) {
   const envVal = process.env[`MEMORY_LITE_${key}`];
   if (envVal !== void 0) {
     const def = DEFAULTS[key];
-    if (typeof def === "number") return Number(envVal);
+    if (typeof def === "number") {
+      const num = Number(envVal);
+      if (isNaN(num)) return def;
+      return num;
+    }
     return envVal;
   }
   return getSettings()[key];
@@ -3918,47 +3962,49 @@ function processMessage(msg, text, contentSessionId, pendingResults) {
   }
 }
 function processObservation(msg, text, contentSessionId, pendingResults) {
-  const parsed = parseObservationXml(text);
-  if (parsed && parsed.type !== "skip") {
-    const session = getSessionByContentId(contentSessionId);
-    if (session) {
-      try {
+  let parsed = null;
+  try {
+    parsed = parseObservationXml(text);
+    if (parsed && parsed.type !== "skip") {
+      const session = getSessionByContentId(contentSessionId);
+      if (session) {
         const result = storeObservation(session.id, session.project, parsed, contentSessionId);
         deletePending(msg.id);
         if (!result.deduplicated) {
           embedObservation(getDb(), result.id, parsed.title, parsed.narrative, parsed.facts).catch((err) => logger.error("message-processor", "embedding failed", err));
         }
-      } catch (err) {
-        logger.error("message-processor", "Failed to store observation", err);
-        return;
+      } else {
+        deletePending(msg.id);
       }
     } else {
       deletePending(msg.id);
     }
-  } else {
-    deletePending(msg.id);
+  } catch (err) {
+    logger.error("message-processor", "Failed to store observation", err);
+  } finally {
+    resolvePending(msg.id, parsed ?? null, pendingResults);
   }
-  resolvePending(msg.id, parsed ?? null, pendingResults);
 }
 function processSummary(msg, text, contentSessionId, pendingResults) {
-  const parsed = parseSummaryXml(text);
-  if (parsed) {
-    const session = getSessionByContentId(contentSessionId);
-    if (session) {
-      try {
+  let parsed = null;
+  try {
+    parsed = parseSummaryXml(text);
+    if (parsed) {
+      const session = getSessionByContentId(contentSessionId);
+      if (session) {
         storeSummary(session.id, session.project, parsed);
         deletePending(msg.id);
-      } catch (err) {
-        logger.error("message-processor", "Failed to store summary", err);
-        return;
+      } else {
+        deletePending(msg.id);
       }
     } else {
       deletePending(msg.id);
     }
-  } else {
-    deletePending(msg.id);
+  } catch (err) {
+    logger.error("message-processor", "Failed to store summary", err);
+  } finally {
+    resolvePending(msg.id, parsed ?? null, pendingResults);
   }
-  resolvePending(msg.id, parsed ?? null, pendingResults);
 }
 function resolvePending(msgId, value, pendingResults) {
   const pending = pendingResults.get(msgId);
@@ -3991,22 +4037,26 @@ function getOrCreateObserver(contentSessionId, project, userPrompt) {
   }
   creatingSessions.add(contentSessionId);
   if (activeSessions.size >= MAX_OBSERVERS) {
-    let oldestId = null;
-    let oldestTime = Infinity;
+    let evictId = null;
+    let evictTime = Infinity;
+    let evictHasPending = true;
     for (const [id, s] of activeSessions) {
-      if (s.lastActivityTime < oldestTime) {
-        oldestTime = s.lastActivityTime;
-        oldestId = id;
+      const hasPendingWork = getPendingCount(id) > 0;
+      if (!hasPendingWork && evictHasPending || hasPendingWork === evictHasPending && s.lastActivityTime < evictTime) {
+        evictId = id;
+        evictTime = s.lastActivityTime;
+        evictHasPending = hasPendingWork;
       }
     }
-    if (oldestId) {
-      logger.warn("observer", `Observer cap (${MAX_OBSERVERS}) reached, evicting oldest session ${oldestId}`);
-      destroyObserver(oldestId);
+    if (evictId) {
+      logger.warn("observer", `Observer cap (${MAX_OBSERVERS}) reached, evicting session ${evictId} (hasPending=${evictHasPending})`);
+      destroyObserver(evictId);
     }
   }
   const staleMemorySessionId = getMemorySessionId(contentSessionId);
   if (staleMemorySessionId) {
     logger.warn("observer", `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
+    setMemorySessionId(contentSessionId, null);
   }
   const hasPending = getPendingCount(contentSessionId) > 0;
   if (hasPending) {

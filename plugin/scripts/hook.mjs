@@ -171,7 +171,11 @@ function getSetting(key) {
   const envVal = process.env[`MEMORY_LITE_${key}`];
   if (envVal !== void 0) {
     const def = DEFAULTS[key];
-    if (typeof def === "number") return Number(envVal);
+    if (typeof def === "number") {
+      const num = Number(envVal);
+      if (isNaN(num)) return def;
+      return num;
+    }
     return envVal;
   }
   return getSettings()[key];
