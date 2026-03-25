@@ -33,12 +33,14 @@ function insertSession(contentSessionId: string, project: string) {
 function insertObservation(sessionId: number, project: string, title: string, epoch: number, opts: Record<string, any> = {}) {
   const iso = new Date(epoch).toISOString();
   const result = testDb.prepare(
-    `INSERT INTO observations (session_id, project, type, title, facts, narrative, files_read, files_modified, content_hash, created_at, created_at_epoch)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO observations (session_id, project, type, title, subtitle, facts, narrative, concepts, files_read, files_modified, content_hash, created_at, created_at_epoch)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     sessionId, project, opts.type || 'feature', title,
+    opts.subtitle || null,
     opts.facts || '["fact one","fact two"]',
     opts.narrative || 'A narrative about the observation.',
+    opts.concepts || null,
     opts.files_read || '["src/a.ts"]',
     opts.files_modified || '["src/b.ts"]',
     `hash-${epoch}`, iso, epoch
@@ -116,6 +118,86 @@ describe('generateContext', () => {
     const afterPos = ctx.indexOf('After summary');
     expect(beforePos).toBeLessThan(summaryPos);
     expect(summaryPos).toBeLessThan(afterPos);
+  });
+
+  it('shows concepts as badges on full observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    insertObservation(session.id, 'proj', 'Tricky obs', 1700000000000, {
+      concepts: '["gotcha","problem-solution"]',
+    });
+    const ctx = generateContext('proj');
+    expect(ctx).toContain('[gotcha]');
+    expect(ctx).toContain('[problem-solution]');
+  });
+
+  it('shows only high-signal concepts (gotcha, trade-off) on compact observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    const base = 1700000000000;
+    // Insert 5 observations so oldest 2 are compact
+    for (let i = 0; i < 4; i++) {
+      insertObservation(session.id, 'proj', `Obs ${i}`, base + i * 1000);
+    }
+    insertObservation(session.id, 'proj', 'Compact gotcha', base + 4000, {
+      concepts: '["gotcha","how-it-works"]',
+    });
+    const ctx = generateContext('proj');
+    // The 5 obs: Obs 0-3 + Compact gotcha (newest). FULL_OBSERVATION_COUNT=3
+    // Newest 3 get full: Obs 2, Obs 3, Compact gotcha — compact gotcha IS full
+    expect(ctx).toContain('[gotcha]');
+    expect(ctx).toContain('[how-it-works]');
+  });
+
+  it('does not show [how-it-works] badge on compact observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    const base = 1700000000000;
+    for (let i = 0; i < 3; i++) {
+      insertObservation(session.id, 'proj', `Full obs ${i}`, base + i * 1000 + 10000);
+    }
+    // This one is compact (oldest)
+    insertObservation(session.id, 'proj', 'Compact obs', base, {
+      concepts: '["how-it-works","pattern"]',
+    });
+    const ctx = generateContext('proj');
+    const compactLine = ctx.split('\n').find(l => l.includes('Compact obs') && !l.startsWith('**'));
+    expect(compactLine).toBeDefined();
+    expect(compactLine).not.toContain('[how-it-works]');
+    expect(compactLine).not.toContain('[pattern]');
+  });
+
+  it('shows [trade-off] badge on compact observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    const base = 1700000000000;
+    for (let i = 0; i < 3; i++) {
+      insertObservation(session.id, 'proj', `Full obs ${i}`, base + i * 1000 + 10000);
+    }
+    insertObservation(session.id, 'proj', 'Compact tradeoff', base, {
+      concepts: '["trade-off","how-it-works"]',
+    });
+    const ctx = generateContext('proj');
+    const compactLine = ctx.split('\n').find(l => l.includes('Compact tradeoff') && !l.startsWith('**'));
+    expect(compactLine).toBeDefined();
+    expect(compactLine).toContain('[trade-off]');
+    expect(compactLine).not.toContain('[how-it-works]');
+  });
+
+  it('shows files_modified on full observations', () => {
+    const session = insertSession('cs-1', 'proj');
+    insertObservation(session.id, 'proj', 'Changed files', 1700000000000, {
+      files_modified: '["src/worker/observer.ts","src/db/queries.ts"]',
+    });
+    const ctx = generateContext('proj');
+    expect(ctx).toContain('src/worker/observer.ts');
+    expect(ctx).toContain('src/db/queries.ts');
+    expect(ctx).toContain('Files:');
+  });
+
+  it('does not show Files line when files_modified is empty', () => {
+    const session = insertSession('cs-1', 'proj');
+    insertObservation(session.id, 'proj', 'No files', 1700000000000, {
+      files_modified: '[]',
+    });
+    const ctx = generateContext('proj');
+    expect(ctx).not.toContain('Files:');
   });
 
   it('shows summary with learned and next fields', () => {

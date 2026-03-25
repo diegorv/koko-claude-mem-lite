@@ -99,14 +99,21 @@ export function generateContext(project: string): string {
         const isFull = fullIds.has(obs.id);
 
         if (isFull) {
-          lines.push(`**${obs.id}** ${time} ${typeIcon(obs.type)} **${obs.title || 'Untitled'}**`);
+          const concepts = parseJsonArray(obs.concepts);
+          const conceptBadges = concepts.length > 0 ? '  ' + concepts.map(c => `[${c}]`).join('') : '';
+          lines.push(`**${obs.id}** ${time} ${typeIcon(obs.type)} **${obs.title || 'Untitled'}**${conceptBadges}`);
           if (obs.subtitle) lines.push(`  ${obs.subtitle}`);
           if (obs.narrative) lines.push(`  ${obs.narrative}`);
           const facts = parseJsonArray(obs.facts);
           for (const fact of facts) lines.push(`  - ${fact}`);
+          const files = parseJsonArray(obs.files_modified);
+          if (files.length > 0) lines.push(`  Files: ${files.join(', ')}`);
         } else {
           const subtitle = obs.subtitle ? ` — ${obs.subtitle}` : '';
-          lines.push(`${obs.id} ${time} ${typeIcon(obs.type)} ${obs.title || '-'}${subtitle}`);
+          const concepts = parseJsonArray(obs.concepts);
+          const highSignal = concepts.filter(c => c === 'gotcha' || c === 'trade-off');
+          const badges = highSignal.length > 0 ? ' ' + highSignal.map(c => `[${c}]`).join('') : '';
+          lines.push(`${obs.id} ${time} ${typeIcon(obs.type)} ${obs.title || '-'}${subtitle}${badges}`);
         }
       }
     }
