@@ -5,13 +5,47 @@
  */
 
 import { EventEmitter } from 'events';
-import { query, type Query } from '@anthropic-ai/claude-agent-sdk';
+import { execSync } from 'child_process';
+import { existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { parseObservationXml, parseSummaryXml, type ParsedObservation, type ParsedSummary } from './summarizer.js';
 import { enqueuePending, claimNextPending, deletePending, getPendingCount, forceUnstickAll, type PendingMessage } from '../db/pending-store.js';
 import { setMemorySessionId, getMemorySessionId, storeObservation, storeSummary, getSessionByContentId } from '../db/queries.js';
 import { embedObservation } from '../embeddings/embeddings.js';
 import { getDb } from '../db/database.js';
 import { logger } from '../utils/logger.js';
+
+// --- SDK environment helpers ---
+
+const OBSERVER_SESSIONS_DIR = join(homedir(), '.memory-lite', 'observer-sessions');
+
+function ensureObserverSessionsDir(): string {
+  if (!existsSync(OBSERVER_SESSIONS_DIR)) {
+    mkdirSync(OBSERVER_SESSIONS_DIR, { recursive: true });
+  }
+  return OBSERVER_SESSIONS_DIR;
+}
+
+let cachedClaudePath: string | null = null;
+
+function findClaudeExecutable(): string {
+  if (cachedClaudePath) return cachedClaudePath;
+  try {
+    cachedClaudePath = execSync('which claude', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim().split('\n')[0].trim();
+    if (cachedClaudePath) {
+      logger.info('observer', `Found claude executable: ${cachedClaudePath}`);
+      return cachedClaudePath;
+    }
+  } catch {
+    logger.warn('observer', 'Could not find claude executable via "which claude"');
+  }
+  return 'claude';
+}
 
 // --- Prompts (adapted from claude-mem) ---
 
@@ -84,7 +118,9 @@ OUTPUT FORMAT
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
 
 function buildInitPrompt(project: string, userPrompt?: string): string {
-  return `MEMORY PROCESSING START
+  return `${SYSTEM_PROMPT}
+
+MEMORY PROCESSING START
 =======================
 Session started for project: ${project}
 ${userPrompt ? `User request: ${userPrompt}` : ''}`;
@@ -244,6 +280,10 @@ export class ObserverSession {
     this.restartCount = restartCount;
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
 
+    // Unstick any orphaned processing messages from previous runs
+    const unstuck = forceUnstickAll(contentSessionId);
+    if (unstuck > 0) logger.info('observer', `Constructor unstuck ${unstuck} messages for ${contentSessionId}`);
+
     this.runConversation(project, userPrompt);
   }
 
@@ -304,44 +344,58 @@ export class ObserverSession {
   }
 
   private async runConversation(project: string, userPrompt?: string): Promise<void> {
-    let currentPendingMsg: PendingMessage | null = null;
+    let currentPendingMsg: any = null;
     const isResume = !!this.memorySessionId;
 
     try {
       const self = this;
+      const toSDKMessage = (content: string): SDKUserMessage => ({
+        type: 'user',
+        message: { role: 'user', content },
+        session_id: self.contentSessionId,
+        parent_tool_use_id: null,
+        isSynthetic: true,
+      });
+
       const messageGenerator = async function* () {
-        // First message: init prompt (only if not resuming)
+        // First message: init prompt with system prompt embedded (only if not resuming)
         if (!isResume) {
-          yield buildInitPrompt(project, userPrompt);
+          yield toSDKMessage(buildInitPrompt(project, userPrompt));
         }
 
         // Messages from durable queue
         for await (const msg of self.queue) {
           currentPendingMsg = msg;
-          yield msg.prompt;
+          yield toSDKMessage(msg.prompt);
         }
       }();
 
-      const queryOptions: any = {
-        model: 'claude-sonnet-4-6',
-        systemPrompt: SYSTEM_PROMPT,
-        maxTurns: 0,
-        tools: [],
-        disallowedTools: ['*'],
-        abortController: this.abortController,
-      };
+      const claudePath = findClaudeExecutable();
+      const observerCwd = ensureObserverSessionsDir();
 
-      // Resume existing conversation if we have a memory session ID
-      const queryArgs: any = { prompt: messageGenerator, options: queryOptions };
-      if (this.memorySessionId) {
-        queryArgs.resume = this.memorySessionId;
-        logger.info('observer', `Resuming session ${this.contentSessionId} with memorySessionId`);
-      }
+      const disallowedTools = [
+        'Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob',
+        'WebFetch', 'WebSearch', 'Task', 'NotebookEdit',
+        'AskUserQuestion', 'TodoWrite',
+      ];
 
-      logger.info('observer', `Starting SDK query for ${this.contentSessionId} (resume=${isResume})`);
-      const conversation = query(queryArgs);
+      const shouldResume = isResume && this.restartCount === 0;
+
+      logger.info('observer', `Starting SDK query for ${this.contentSessionId} (resume=${shouldResume}, model=claude-sonnet-4-6)`);
+
+      const conversation = query({
+        prompt: messageGenerator,
+        options: {
+          model: 'claude-sonnet-4-6',
+          cwd: observerCwd,
+          ...(shouldResume && this.memorySessionId && { resume: this.memorySessionId }),
+          disallowedTools,
+          abortController: this.abortController,
+          pathToClaudeCodeExecutable: claudePath,
+        },
+      });
+
       this.conversation = conversation;
-      logger.info('observer', `SDK query created for ${this.contentSessionId}`);
 
       // Idle timeout: if no SDK messages for 5 min, force-close
       const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -361,26 +415,30 @@ export class ObserverSession {
       idleChecker.unref();
 
       try {
+        logger.info('observer', `Entering SDK for-await loop for ${this.contentSessionId}`);
         for await (const message of conversation) {
           sdkMessageCount++;
           lastMessageTime = Date.now();
           logger.info('observer', `SDK message #${sdkMessageCount} type=${message.type} for ${this.contentSessionId}`);
 
-          // Capture memory session ID from first assistant message
-          if (message.type === 'assistant' && !this.memorySessionId) {
-            const sessionId = (message as any).session_id || (message as any).message?.session_id;
-            if (sessionId) {
-              this.memorySessionId = sessionId;
-              setMemorySessionId(this.contentSessionId, sessionId);
-              logger.info('observer', `Captured memorySessionId for ${this.contentSessionId}`);
-            }
+          // Capture or update memory session ID from ANY message (like claude-mem)
+          // The SDK may return a different session_id on resume
+          if ((message as any).session_id && (message as any).session_id !== this.memorySessionId) {
+            const prev = this.memorySessionId;
+            this.memorySessionId = (message as any).session_id;
+            setMemorySessionId(this.contentSessionId, this.memorySessionId!);
+            logger.info('observer', `${prev ? 'Updated' : 'Captured'} memorySessionId for ${this.contentSessionId}`);
           }
 
-          // Process assistant response
-          if (message.type === 'assistant' && (message as any).message?.content) {
-            let text = '';
-            for (const block of (message as any).message.content) {
-              if (block.type === 'text') text += block.text;
+          // Handle assistant messages (extract text exactly like claude-mem)
+          if (message.type === 'assistant') {
+            const content = (message as any).message?.content;
+            const text = Array.isArray(content)
+              ? content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+              : typeof content === 'string' ? content : '';
+
+            if (text.length > 0) {
+              logger.info('observer', `Assistant response (${text.length} chars) for ${this.contentSessionId}`);
             }
 
             if (currentPendingMsg && text) {
@@ -389,14 +447,14 @@ export class ObserverSession {
             }
           }
 
-          if (message.type === 'result' && (message as any).subtype === 'success') {
-            const text = (message as any).result || '';
-            if (currentPendingMsg && text) {
-              this.resolveAndCleanup(currentPendingMsg, text);
-              currentPendingMsg = null;
-            }
+          // Log result messages
+          if (message.type === 'result') {
+            logger.info('observer', `Result for ${this.contentSessionId}: subtype=${(message as any).subtype}`);
           }
         }
+      } catch (err) {
+        logger.error('observer', `SDK for-await loop error for ${this.contentSessionId}`, err);
+        throw err;
       } finally {
         clearInterval(idleChecker);
         this.conversation = null;
@@ -523,19 +581,23 @@ export function getOrCreateObserver(contentSessionId: string, project: string, u
   let session = activeSessions.get(contentSessionId);
   if (session && !session.isDestroyed()) return session;
 
-  // Check for resume: do we have a memory session ID from a previous worker run?
-  const memorySessionId = getMemorySessionId(contentSessionId);
-  const hasPending = getPendingCount(contentSessionId) > 0;
-
-  if (memorySessionId) {
-    if (hasPending) {
-      const unstuck = forceUnstickAll(contentSessionId);
-      if (unstuck > 0) logger.info('observer', `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
-    }
-    logger.info('observer', `Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? 'has' : 'no'} pending)`);
+  // CRITICAL (Issue #817 from claude-mem): Never resume with stale memorySessionId.
+  // When creating a new in-memory session, any DB memorySessionId is STALE because
+  // the SDK context was lost when the worker restarted. Always start fresh —
+  // the SDK will capture a new memorySessionId on the first response.
+  const staleMemorySessionId = getMemorySessionId(contentSessionId);
+  if (staleMemorySessionId) {
+    logger.warn('observer', `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
   }
 
-  session = new ObserverSession(contentSessionId, project, userPrompt, memorySessionId);
+  // Clean up any orphaned pending messages from previous runs
+  const hasPending = getPendingCount(contentSessionId) > 0;
+  if (hasPending) {
+    const unstuck = forceUnstickAll(contentSessionId);
+    if (unstuck > 0) logger.info('observer', `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+  }
+
+  session = new ObserverSession(contentSessionId, project, userPrompt, null);
   activeSessions.set(contentSessionId, session);
   logger.info('observer', `Created session for ${contentSessionId} (project: ${project})`);
   return session;

@@ -794,8 +794,8 @@ var serveStatic = (options = { root: "" }) => {
 };
 
 // src/worker/server.ts
-import { existsSync as existsSync4, readFileSync as readFileSync2, writeFileSync as writeFileSync2, unlinkSync } from "fs";
-import { join as join3, dirname } from "path";
+import { existsSync as existsSync5, readFileSync as readFileSync2, writeFileSync as writeFileSync2, unlinkSync } from "fs";
+import { join as join4, dirname } from "path";
 import { fileURLToPath } from "url";
 
 // node_modules/hono/dist/compose.js
@@ -3755,6 +3755,10 @@ function parseCleanupResults(text, items) {
 
 // src/worker/observer.ts
 import { EventEmitter } from "events";
+import { execSync } from "child_process";
+import { existsSync as existsSync4, mkdirSync as mkdirSync2 } from "fs";
+import { join as join3 } from "path";
+import { homedir as homedir2 } from "os";
 import { query as query2 } from "@anthropic-ai/claude-agent-sdk";
 
 // src/db/pending-store.ts
@@ -3862,6 +3866,30 @@ async function embedObservation(db2, observationId, title, narrative, facts) {
 }
 
 // src/worker/observer.ts
+var OBSERVER_SESSIONS_DIR = join3(homedir2(), ".memory-lite", "observer-sessions");
+function ensureObserverSessionsDir() {
+  if (!existsSync4(OBSERVER_SESSIONS_DIR)) {
+    mkdirSync2(OBSERVER_SESSIONS_DIR, { recursive: true });
+  }
+  return OBSERVER_SESSIONS_DIR;
+}
+var cachedClaudePath = null;
+function findClaudeExecutable() {
+  if (cachedClaudePath) return cachedClaudePath;
+  try {
+    cachedClaudePath = execSync("which claude", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim().split("\n")[0].trim();
+    if (cachedClaudePath) {
+      logger.info("observer", `Found claude executable: ${cachedClaudePath}`);
+      return cachedClaudePath;
+    }
+  } catch {
+    logger.warn("observer", 'Could not find claude executable via "which claude"');
+  }
+  return "claude";
+}
 var SYSTEM_PROMPT = `You are a specialized observer creating searchable memory FOR FUTURE SESSIONS.
 
 CRITICAL: Record what was LEARNED/BUILT/FIXED/DEPLOYED/CONFIGURED, not what you (the observer) are doing.
@@ -3930,7 +3958,9 @@ OUTPUT FORMAT
 
 IMPORTANT: Never reference yourself or your own actions. Do not output anything other than the observation XML. Spend your tokens wisely on useful observations. If there's nothing worth recording, output nothing.`;
 function buildInitPrompt(project, userPrompt) {
-  return `MEMORY PROCESSING START
+  return `${SYSTEM_PROMPT}
+
+MEMORY PROCESSING START
 =======================
 Session started for project: ${project}
 ${userPrompt ? `User request: ${userPrompt}` : ""}`;
@@ -4062,6 +4092,8 @@ var ObserverSession = class _ObserverSession {
     this.memorySessionId = memorySessionId || null;
     this.restartCount = restartCount;
     this.queue = new DurableQueue(contentSessionId, this.abortController.signal);
+    const unstuck = forceUnstickAll(contentSessionId);
+    if (unstuck > 0) logger.info("observer", `Constructor unstuck ${unstuck} messages for ${contentSessionId}`);
     this.runConversation(project, userPrompt);
   }
   async pushObservation(toolName, toolInput, toolResponse, cwd) {
@@ -4114,32 +4146,52 @@ var ObserverSession = class _ObserverSession {
     const isResume = !!this.memorySessionId;
     try {
       const self = this;
+      const toSDKMessage = (content) => ({
+        type: "user",
+        message: { role: "user", content },
+        session_id: self.contentSessionId,
+        parent_tool_use_id: null,
+        isSynthetic: true
+      });
       const messageGenerator = (async function* () {
         if (!isResume) {
-          yield buildInitPrompt(project, userPrompt);
+          yield toSDKMessage(buildInitPrompt(project, userPrompt));
         }
         for await (const msg of self.queue) {
           currentPendingMsg = msg;
-          yield msg.prompt;
+          yield toSDKMessage(msg.prompt);
         }
       })();
-      const queryOptions = {
-        model: "claude-sonnet-4-6",
-        systemPrompt: SYSTEM_PROMPT,
-        maxTurns: 0,
-        tools: [],
-        disallowedTools: ["*"],
-        abortController: this.abortController
-      };
-      const queryArgs = { prompt: messageGenerator, options: queryOptions };
-      if (this.memorySessionId) {
-        queryArgs.resume = this.memorySessionId;
-        logger.info("observer", `Resuming session ${this.contentSessionId} with memorySessionId`);
-      }
-      logger.info("observer", `Starting SDK query for ${this.contentSessionId} (resume=${isResume})`);
-      const conversation = query2(queryArgs);
+      const claudePath = findClaudeExecutable();
+      const observerCwd = ensureObserverSessionsDir();
+      const disallowedTools = [
+        "Bash",
+        "Read",
+        "Write",
+        "Edit",
+        "Grep",
+        "Glob",
+        "WebFetch",
+        "WebSearch",
+        "Task",
+        "NotebookEdit",
+        "AskUserQuestion",
+        "TodoWrite"
+      ];
+      const shouldResume = isResume && this.restartCount === 0;
+      logger.info("observer", `Starting SDK query for ${this.contentSessionId} (resume=${shouldResume}, model=claude-sonnet-4-6)`);
+      const conversation = query2({
+        prompt: messageGenerator,
+        options: {
+          model: "claude-sonnet-4-6",
+          cwd: observerCwd,
+          ...shouldResume && this.memorySessionId && { resume: this.memorySessionId },
+          disallowedTools,
+          abortController: this.abortController,
+          pathToClaudeCodeExecutable: claudePath
+        }
+      });
       this.conversation = conversation;
-      logger.info("observer", `SDK query created for ${this.contentSessionId}`);
       const QUERY_IDLE_TIMEOUT_MS = 5 * 60 * 1e3;
       let lastMessageTime = Date.now();
       let sdkMessageCount = 0;
@@ -4159,36 +4211,35 @@ var ObserverSession = class _ObserverSession {
       }, 3e4);
       idleChecker.unref();
       try {
+        logger.info("observer", `Entering SDK for-await loop for ${this.contentSessionId}`);
         for await (const message of conversation) {
           sdkMessageCount++;
           lastMessageTime = Date.now();
           logger.info("observer", `SDK message #${sdkMessageCount} type=${message.type} for ${this.contentSessionId}`);
-          if (message.type === "assistant" && !this.memorySessionId) {
-            const sessionId = message.session_id || message.message?.session_id;
-            if (sessionId) {
-              this.memorySessionId = sessionId;
-              setMemorySessionId(this.contentSessionId, sessionId);
-              logger.info("observer", `Captured memorySessionId for ${this.contentSessionId}`);
-            }
+          if (message.session_id && message.session_id !== this.memorySessionId) {
+            const prev = this.memorySessionId;
+            this.memorySessionId = message.session_id;
+            setMemorySessionId(this.contentSessionId, this.memorySessionId);
+            logger.info("observer", `${prev ? "Updated" : "Captured"} memorySessionId for ${this.contentSessionId}`);
           }
-          if (message.type === "assistant" && message.message?.content) {
-            let text = "";
-            for (const block of message.message.content) {
-              if (block.type === "text") text += block.text;
+          if (message.type === "assistant") {
+            const content = message.message?.content;
+            const text = Array.isArray(content) ? content.filter((c) => c.type === "text").map((c) => c.text).join("\n") : typeof content === "string" ? content : "";
+            if (text.length > 0) {
+              logger.info("observer", `Assistant response (${text.length} chars) for ${this.contentSessionId}`);
             }
             if (currentPendingMsg && text) {
               this.resolveAndCleanup(currentPendingMsg, text);
               currentPendingMsg = null;
             }
           }
-          if (message.type === "result" && message.subtype === "success") {
-            const text = message.result || "";
-            if (currentPendingMsg && text) {
-              this.resolveAndCleanup(currentPendingMsg, text);
-              currentPendingMsg = null;
-            }
+          if (message.type === "result") {
+            logger.info("observer", `Result for ${this.contentSessionId}: subtype=${message.subtype}`);
           }
         }
+      } catch (err) {
+        logger.error("observer", `SDK for-await loop error for ${this.contentSessionId}`, err);
+        throw err;
       } finally {
         clearInterval(idleChecker);
         this.conversation = null;
@@ -4301,16 +4352,16 @@ var activeSessions = /* @__PURE__ */ new Map();
 function getOrCreateObserver(contentSessionId, project, userPrompt) {
   let session = activeSessions.get(contentSessionId);
   if (session && !session.isDestroyed()) return session;
-  const memorySessionId = getMemorySessionId(contentSessionId);
-  const hasPending = getPendingCount(contentSessionId) > 0;
-  if (memorySessionId) {
-    if (hasPending) {
-      const unstuck = forceUnstickAll(contentSessionId);
-      if (unstuck > 0) logger.info("observer", `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
-    }
-    logger.info("observer", `Recovering session ${contentSessionId} (memorySessionId found, ${hasPending ? "has" : "no"} pending)`);
+  const staleMemorySessionId = getMemorySessionId(contentSessionId);
+  if (staleMemorySessionId) {
+    logger.warn("observer", `Discarding stale memorySessionId for ${contentSessionId} (SDK context lost on worker restart)`);
   }
-  session = new ObserverSession(contentSessionId, project, userPrompt, memorySessionId);
+  const hasPending = getPendingCount(contentSessionId) > 0;
+  if (hasPending) {
+    const unstuck = forceUnstickAll(contentSessionId);
+    if (unstuck > 0) logger.info("observer", `Force-unstuck ${unstuck} messages for ${contentSessionId}`);
+  }
+  session = new ObserverSession(contentSessionId, project, userPrompt, null);
   activeSessions.set(contentSessionId, session);
   logger.info("observer", `Created session for ${contentSessionId} (project: ${project})`);
   return session;
@@ -4840,10 +4891,10 @@ app.post("/api/cleanup/apply", async (c) => {
 
 // src/worker/server.ts
 var __dirname = dirname(fileURLToPath(import.meta.url));
-var uiPath = join3(__dirname, "..", "ui");
-if (existsSync4(uiPath)) {
+var uiPath = join4(__dirname, "..", "ui");
+if (existsSync5(uiPath)) {
   app.get("/", (c) => {
-    const html = readFileSync2(join3(uiPath, "index.html"), "utf-8");
+    const html = readFileSync2(join4(uiPath, "index.html"), "utf-8");
     return c.html(html);
   });
   app.use("/*", serveStatic({ root: uiPath }));
@@ -4856,7 +4907,7 @@ function writePid() {
 }
 function removePid() {
   try {
-    if (existsSync4(pidPath)) unlinkSync(pidPath);
+    if (existsSync5(pidPath)) unlinkSync(pidPath);
   } catch {
   }
 }
@@ -4909,7 +4960,7 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 process.on("SIGHUP", shutdown);
 async function checkExistingWorker() {
-  if (!existsSync4(pidPath)) return false;
+  if (!existsSync5(pidPath)) return false;
   try {
     const raw2 = readFileSync2(pidPath, "utf-8").trim();
     let oldPid;
