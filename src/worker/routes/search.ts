@@ -64,7 +64,11 @@ searchRoutes.post('/observations/batch', async (c) => {
       return c.json({ error: `Too many IDs (max ${MAX_BATCH})` }, 400);
     }
 
-    const observations = getObservationsByIds(ids.map(Number));
+    const numericIds = ids.map(Number);
+    if (numericIds.some(isNaN)) {
+      return c.json({ error: 'All IDs must be valid integers' }, 400);
+    }
+    const observations = getObservationsByIds(numericIds);
     const formatted = formatObservationsFull(observations);
     return c.json({ content: [{ type: 'text', text: formatted }] });
   } catch (error) {

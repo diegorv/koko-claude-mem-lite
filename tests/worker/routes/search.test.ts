@@ -114,6 +114,16 @@ describe('POST /observations/batch', () => {
     expect(body.error).toContain('Too many IDs');
   });
 
+  it('returns 400 for non-numeric ids', async () => {
+    const res = await searchRoutes.request('/observations/batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1, 'abc', 3] }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('valid integers');
+  });
+
   it('returns formatted observations for valid ids', async () => {
     const session = insertSession('cs-1', 'proj');
     insertObs(session.id, 'proj', 'Batch test obs', 1700000000000);
