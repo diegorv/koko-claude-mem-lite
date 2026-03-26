@@ -11,6 +11,22 @@ import { getProjectName } from '../utils/paths.js';
 import { isProjectExcluded } from '../utils/settings.js';
 import { workerFetch, spawnWorker } from './worker-spawn.js';
 
+// --- Worker auto-respawn ---
+
+async function ensureWorkerAndFetch(
+  path: string,
+  options?: RequestInit,
+  retries?: number,
+  timeoutMs?: number,
+): Promise<Response | null> {
+  const res = await workerFetch(path, options, retries, timeoutMs);
+  if (res) return res;
+
+  // Worker might be dead — try to respawn and retry
+  await spawnWorker();
+  return workerFetch(path, options, retries, timeoutMs);
+}
+
 // --- Handlers ---
 
 async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<void> {
@@ -21,7 +37,7 @@ async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<
     return;
   }
 
-  const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
+  const res = await ensureWorkerAndFetch(`/api/context?project=${encodeURIComponent(project)}`);
   if (!res || !res.ok) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
@@ -50,7 +66,7 @@ async function handleSessionInit(input: ReturnType<typeof normalizeInput>): Prom
   }
   const prompt = input.prompt ? stripPrivateTags(input.prompt) : undefined;
 
-  await workerFetch('/api/sessions', {
+  await ensureWorkerAndFetch('/api/sessions', {
     method: 'POST',
     body: JSON.stringify({ contentSessionId: input.sessionId, project, prompt }),
   });
@@ -88,7 +104,7 @@ async function handleObservation(input: ReturnType<typeof normalizeInput>): Prom
 
   // Fire-and-forget: observations are non-critical. Use short timeout with no retries
   // so a slow/stuck worker never blocks Claude Code for more than 3s per tool call.
-  await workerFetch('/api/observations', {
+  await ensureWorkerAndFetch('/api/observations', {
     method: 'POST',
     body: JSON.stringify({
       contentSessionId: input.sessionId,
@@ -133,7 +149,7 @@ async function handleSummarize(input: ReturnType<typeof normalizeInput>): Promis
     } catch { /* transcript not readable */ }
   }
 
-  await workerFetch('/api/summarize', {
+  await ensureWorkerAndFetch('/api/summarize', {
     method: 'POST',
     body: JSON.stringify({
       contentSessionId: input.sessionId,
@@ -150,7 +166,7 @@ async function handleSessionEnd(input: ReturnType<typeof normalizeInput>): Promi
     return;
   }
 
-  await workerFetch('/api/sessions/complete', {
+  await ensureWorkerAndFetch('/api/sessions/complete', {
     method: 'POST',
     body: JSON.stringify({ contentSessionId: input.sessionId }),
   });

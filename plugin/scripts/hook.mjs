@@ -319,13 +319,19 @@ async function spawnWorker() {
 }
 
 // src/hooks/hook.ts
+async function ensureWorkerAndFetch(path, options, retries, timeoutMs) {
+  const res = await workerFetch(path, options, retries, timeoutMs);
+  if (res) return res;
+  await spawnWorker();
+  return workerFetch(path, options, retries, timeoutMs);
+}
 async function handleContext(input) {
   const project = getProjectName(input.cwd);
   if (isProjectExcluded(project)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
-  const res = await workerFetch(`/api/context?project=${encodeURIComponent(project)}`);
+  const res = await ensureWorkerAndFetch(`/api/context?project=${encodeURIComponent(project)}`);
   if (!res || !res.ok) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
@@ -348,7 +354,7 @@ async function handleSessionInit(input) {
     return;
   }
   const prompt = input.prompt ? stripPrivateTags(input.prompt) : void 0;
-  await workerFetch("/api/sessions", {
+  await ensureWorkerAndFetch("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ contentSessionId: input.sessionId, project, prompt })
   });
@@ -388,7 +394,7 @@ async function handleObservation(input) {
   }
   const cleanInput = input.toolInput ? stripPrivateTags(input.toolInput) : "";
   const cleanResponse = input.toolResponse ? stripPrivateTags(input.toolResponse) : "";
-  await workerFetch("/api/observations", {
+  await ensureWorkerAndFetch("/api/observations", {
     method: "POST",
     body: JSON.stringify({
       contentSessionId: input.sessionId,
@@ -428,7 +434,7 @@ async function handleSummarize(input) {
     } catch {
     }
   }
-  await workerFetch("/api/summarize", {
+  await ensureWorkerAndFetch("/api/summarize", {
     method: "POST",
     body: JSON.stringify({
       contentSessionId: input.sessionId,
@@ -442,7 +448,7 @@ async function handleSessionEnd(input) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }
-  await workerFetch("/api/sessions/complete", {
+  await ensureWorkerAndFetch("/api/sessions/complete", {
     method: "POST",
     body: JSON.stringify({ contentSessionId: input.sessionId })
   });
