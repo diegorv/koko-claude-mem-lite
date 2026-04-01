@@ -8,7 +8,7 @@ import { readJsonFromStdin } from './stdin.js';
 import { normalizeInput, formatContextOutput, formatSilentOutput } from './adapter.js';
 import { stripPrivateTags } from '../utils/privacy.js';
 import { getProjectName } from '../utils/paths.js';
-import { isProjectExcluded } from '../utils/settings.js';
+import { isProjectExcluded, isContextEnabled } from '../utils/settings.js';
 import { workerFetch, spawnWorker } from './worker-spawn.js';
 
 // --- Worker auto-respawn ---
@@ -32,7 +32,7 @@ async function ensureWorkerAndFetch(
 async function handleContext(input: ReturnType<typeof normalizeInput>): Promise<void> {
   const project = getProjectName(input.cwd);
 
-  if (isProjectExcluded(project)) {
+  if (isProjectExcluded(project) || !isContextEnabled(project)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }

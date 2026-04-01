@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getContextPreview, deleteObservation, deleteSummary, reviewCleanupStream, applyCleanup, type ContextBreakdown, type CleanupResult, type PendingItem } from '../api';
+  import { getContextPreview, getSettingsData, updateSettings, deleteObservation, deleteSummary, reviewCleanupStream, applyCleanup, type ContextBreakdown, type CleanupResult, type PendingItem } from '../api';
 
   let { project = '' }: { project?: string } = $props();
 
@@ -10,6 +10,46 @@
   let confirmDeleteType: string = $state('');
   let confirmDeleteId: number | null = $state(null);
   let deleting = $state(false);
+
+  // Context injection toggle
+  let contextEnabled = $state(false);
+  let togglingContext = $state(false);
+
+  async function loadContextEnabled() {
+    if (!project) {
+      contextEnabled = false;
+      return;
+    }
+    try {
+      const settings = await getSettingsData();
+      const raw = (settings.CONTEXT_ENABLED_PROJECTS || '').trim();
+      const enabled = raw ? raw.split(',').map(p => p.trim()).filter(Boolean) : [];
+      contextEnabled = enabled.some(p => p.toLowerCase() === project.toLowerCase());
+    } catch { contextEnabled = false; }
+  }
+
+  async function toggleContextEnabled() {
+    if (!project) return;
+    togglingContext = true;
+    try {
+      const settings = await getSettingsData();
+      const raw = (settings.CONTEXT_ENABLED_PROJECTS || '').trim();
+      const enabled = raw ? raw.split(',').map(p => p.trim()).filter(Boolean) : [];
+      const idx = enabled.findIndex(p => p.toLowerCase() === project.toLowerCase());
+      if (idx >= 0) {
+        enabled.splice(idx, 1);
+        contextEnabled = false;
+      } else {
+        enabled.push(project);
+        contextEnabled = true;
+      }
+      await updateSettings({ CONTEXT_ENABLED_PROJECTS: enabled.join(',') });
+    } catch (err) {
+      console.error('Failed to toggle context injection:', err);
+    } finally {
+      togglingContext = false;
+    }
+  }
 
   // Cleanup state
   let cleanupResults: CleanupResult[] = $state([]);
@@ -159,6 +199,7 @@
   $effect(() => {
     void project;
     load();
+    loadContextEnabled();
   });
 
   let deletionsCount = $derived(cleanupResults.filter(r => r.action === 'delete').length);
@@ -179,6 +220,19 @@
 <div class="context-view">
   <div class="context-header">
     <div class="context-info">
+      {#if project}
+        <button
+          class="inject-toggle"
+          class:enabled={contextEnabled}
+          onclick={toggleContextEnabled}
+          disabled={togglingContext}
+          title={contextEnabled ? 'Context will be injected on SessionStart. Click to disable.' : 'Context is NOT injected. Click to enable.'}
+        >
+          {contextEnabled ? 'Injection ON' : 'Injection OFF'}
+        </button>
+      {:else}
+        <span class="context-label-hint">Select a project to toggle injection</span>
+      {/if}
       <span class="context-label">Injected on next SessionStart</span>
       {#if data && data.estimatedTokens > 0}
         <span class="token-estimate">~{data.estimatedTokens.toLocaleString()} tokens</span>

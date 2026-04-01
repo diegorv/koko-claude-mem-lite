@@ -3880,7 +3880,8 @@ var DEFAULTS = {
   OLLAMA_URL: "http://localhost:11434",
   OLLAMA_MODEL: "bge-m3",
   SKIP_TOOLS: "Read,Glob,Grep,LSP",
-  EXCLUDED_PROJECTS: ""
+  EXCLUDED_PROJECTS: "",
+  CONTEXT_ENABLED_PROJECTS: ""
 };
 var cached = null;
 function getSettings() {

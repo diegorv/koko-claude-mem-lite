@@ -141,7 +141,8 @@ var DEFAULTS = {
   OLLAMA_URL: "http://localhost:11434",
   OLLAMA_MODEL: "bge-m3",
   SKIP_TOOLS: "Read,Glob,Grep,LSP",
-  EXCLUDED_PROJECTS: ""
+  EXCLUDED_PROJECTS: "",
+  CONTEXT_ENABLED_PROJECTS: ""
 };
 var cached = null;
 function getSettings() {
@@ -186,6 +187,15 @@ function isProjectExcluded(project) {
 function matchesPattern(pattern, value) {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`, "i").test(value);
+}
+function isContextEnabled(project) {
+  const raw = getSetting("CONTEXT_ENABLED_PROJECTS").trim();
+  if (!raw) return false;
+  const patterns = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  for (const pattern of patterns) {
+    if (matchesPattern(pattern, project)) return true;
+  }
+  return false;
 }
 
 // src/hooks/worker-spawn.ts
@@ -327,7 +337,7 @@ async function ensureWorkerAndFetch(path, options, retries, timeoutMs) {
 }
 async function handleContext(input) {
   const project = getProjectName(input.cwd);
-  if (isProjectExcluded(project)) {
+  if (isProjectExcluded(project) || !isContextEnabled(project)) {
     console.log(JSON.stringify(formatSilentOutput()));
     return;
   }

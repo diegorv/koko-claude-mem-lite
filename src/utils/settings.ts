@@ -10,6 +10,7 @@ export interface Settings {
   OLLAMA_MODEL: string;
   SKIP_TOOLS: string;
   EXCLUDED_PROJECTS: string;
+  CONTEXT_ENABLED_PROJECTS: string;
 }
 
 const DEFAULTS: Settings = {
@@ -21,6 +22,7 @@ const DEFAULTS: Settings = {
   OLLAMA_MODEL: 'bge-m3',
   SKIP_TOOLS: 'Read,Glob,Grep,LSP',
   EXCLUDED_PROJECTS: '',
+  CONTEXT_ENABLED_PROJECTS: '',
 };
 
 let cached: Settings | null = null;
@@ -83,6 +85,22 @@ function matchesPattern(pattern: string, value: string): boolean {
   // Escape regex special chars except '*', then replace '*' with '.*'
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
   return new RegExp(`^${escaped}$`, 'i').test(value);
+}
+
+/**
+ * Returns true if context injection is enabled for the given project.
+ * Checks CONTEXT_ENABLED_PROJECTS (comma-separated, supports * wildcard).
+ * If empty (default), no project gets context injected.
+ */
+export function isContextEnabled(project: string): boolean {
+  const raw = getSetting('CONTEXT_ENABLED_PROJECTS').trim();
+  if (!raw) return false;
+
+  const patterns = raw.split(',').map(p => p.trim()).filter(Boolean);
+  for (const pattern of patterns) {
+    if (matchesPattern(pattern, project)) return true;
+  }
+  return false;
 }
 
 export function updateSettings(partial: Partial<Settings>): Settings {

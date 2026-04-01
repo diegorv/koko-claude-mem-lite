@@ -188,6 +188,7 @@ export interface SettingsData {
   SUMMARY_COUNT: number;
   OLLAMA_URL: string;
   OLLAMA_MODEL: string;
+  CONTEXT_ENABLED_PROJECTS: string;
 }
 
 export function getSettingsData(): Promise<SettingsData> {

@@ -802,6 +802,41 @@ a:hover { text-decoration: underline; }
   color: var(--text-muted);
 }
 
+.context-label-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.inject-toggle {
+  font-size: 11px;
+  font-family: var(--font);
+  padding: 3px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 85, 85, 0.15);
+  color: #ff5555;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.inject-toggle.enabled {
+  background: rgba(80, 250, 123, 0.15);
+  color: #50fa7b;
+  border-color: rgba(80, 250, 123, 0.3);
+}
+
+.inject-toggle:hover {
+  opacity: 0.8;
+}
+
+.inject-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .token-estimate {
   font-size: 11px;
   color: var(--accent);

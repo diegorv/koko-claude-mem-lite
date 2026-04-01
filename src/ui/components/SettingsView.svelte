@@ -103,6 +103,12 @@
         <span class="setting-hint">Comma-separated project names to skip entirely. Supports * wildcard (e.g. private-*,temp*)</span>
         <input type="text" bind:value={settings.EXCLUDED_PROJECTS} />
       </label>
+
+      <label class="setting-field">
+        <span class="setting-label">Context-enabled projects</span>
+        <span class="setting-hint">Comma-separated projects where context is injected on SessionStart. Empty = no injection. Toggle per project in the Context tab.</span>
+        <input type="text" bind:value={settings.CONTEXT_ENABLED_PROJECTS} />
+      </label>
     </div>
 
     <div class="settings-actions">
